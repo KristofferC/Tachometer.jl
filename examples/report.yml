@@ -1,0 +1,91 @@
+# Trusted half of the secure two-workflow setup.
+#
+# Runs on `workflow_run`, from the DEFAULT branch with the repo's own permissions,
+# after the untrusted Benchmarks workflow finishes. It never executes PR code and
+# never trusts the fork-produced markdown: it RE-RENDERS the comment from the
+# structured `report.json` using its own (trusted) Tachometer install, so a
+# hostile artifact can only supply numbers/keys, not arbitrary comment markup.
+name: Benchmark report
+
+on:
+  workflow_run:
+    workflows: [Benchmarks]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  actions: read
+  contents: read
+
+concurrency:
+  group: tachometer-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Post report
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request'
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+    steps:
+      # SECURITY: this job has write access, so install the trusted renderer from
+      # an immutable commit — pin `ref` to a full SHA, never a mutable tag.
+      - uses: actions/checkout@v4
+        with:
+          repository: KristofferC/Tachometer.jl
+          ref: 0000000000000000000000000000000000000000   # <-- replace with a pinned commit SHA
+          path: .tachometer-action
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+      - name: Install the trusted renderer
+        run: julia --project=.tacho -e 'using Pkg; Pkg.develop(PackageSpec(path=".tachometer-action")); Pkg.instantiate()'
+
+      - name: Download report artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tachometer-report-*     # one directory per marker (no merge)
+          path: artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-render and post
+        run: |
+          set -euo pipefail
+          # Authoritative PR from the TRUSTED event: the open PR whose head commit,
+          # branch, and repository all match this workflow_run. Never from the artifact.
+          pr="$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+                --jq --arg b "$HEAD_BRANCH" --arg r "$HEAD_REPO" \
+                '[.[] | select(.state=="open" and .head.ref==$b and .head.repo.full_name==$r)][0].number // empty' \
+                2>/dev/null || true)"
+          # (gh api's --jq lacks --arg on older versions; fall back to plain jq.)
+          if [ -z "$pr" ]; then
+            pr="$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+                  | jq -r --arg b "$HEAD_BRANCH" --arg r "$HEAD_REPO" \
+                    '[.[] | select(.state=="open" and .head.ref==$b and .head.repo.full_name==$r)][0].number // empty')"
+          fi
+          [ -n "$pr" ] || { echo "no matching open PR for ${HEAD_SHA}; skipping"; exit 0; }
+
+          # Skip if the PR has advanced past the benchmarked commit (stale run).
+          cur="$(gh api "repos/${REPO}/pulls/${pr}" --jq '.head.sha')"
+          [ "$cur" = "$HEAD_SHA" ] || { echo "PR #$pr head moved; skipping stale report"; exit 0; }
+
+          script="$(julia --project=.tacho -e 'using Tachometer; print(joinpath(pkgdir(Tachometer),"scripts","comment.sh"))')"
+          shopt -s nullglob
+          for dir in artifacts/*/; do
+            [ -f "$dir/report.json" ] || continue
+            bytes=$(wc -c < "$dir/report.json"); [ "$bytes" -le 2000000 ] || { echo "report.json too large; skipping $dir"; continue; }
+            marker="$(cat "$dir/marker.txt" 2>/dev/null || echo tachometer)"
+            [[ "$marker" =~ ^[A-Za-z0-9._-]+$ ]] || marker=tachometer
+            TACHOMETER_MODE=render TACHOMETER_MARKER="$marker" \
+              TACHOMETER_RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${{ github.event.workflow_run.id }}" \
+              TACHOMETER_REPORT_IN="$dir/report.json" TACHOMETER_REPORT_OUT="$dir/rendered.md" \
+              julia --project=.tacho --startup-file=no -e 'using Tachometer; Tachometer.main()'
+            bash "$script" "$REPO" "$pr" "$marker" "$dir/rendered.md"
+          done

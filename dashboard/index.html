@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tachometer — benchmark history</title>
+<link rel="stylesheet" href="uPlot.min.css">
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1b1f24; --muted: #6a737d; --line: #e1e4e8;
+    --panel: #f6f8fa; --accent: #2563eb; --release: #d1495b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+      --panel: #161b22; --accent: #58a6ff; --release: #f0768b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         color: var(--fg); background: var(--bg); }
+  header { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header a { color: var(--accent); text-decoration: none; }
+  .layout { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
+  .sidebar { width: 300px; flex: none; border-right: 1px solid var(--line);
+             padding: 12px; overflow-y: auto; max-height: calc(100vh - 52px); }
+  main { flex: 1; padding: 16px 18px; min-width: 0; position: relative; }
+  input[type=search] { width: 100%; padding: 7px 9px; border: 1px solid var(--line);
+                       border-radius: 6px; background: var(--bg); color: var(--fg); }
+  .controls { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+  .controls button { border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+                     border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+  .controls button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  .group { margin-top: 12px; }
+  .group h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+              color: var(--muted); margin: 0 0 4px; }
+  .group label { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer;
+                 font-size: 13px; word-break: break-all; }
+  .releases { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .releases h3 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+  .releases a { display: block; color: var(--accent); text-decoration: none; font-size: 12px; padding: 1px 0; }
+  .empty { color: var(--muted); max-width: 560px; }
+  .empty code { background: var(--panel); padding: 1px 5px; border-radius: 4px; }
+  #tooltip { position: absolute; pointer-events: none; z-index: 10; display: none;
+             background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+             padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); max-width: 340px; }
+  #tooltip .sha { color: var(--muted); }
+  #tooltip .msg { margin: 3px 0; }
+  #tooltip .tag { color: var(--release); font-weight: 600; }
+  #tooltip .row { display: flex; justify-content: space-between; gap: 12px; }
+  #tooltip .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .u-legend { font-size: 12px; }
+  /* Narrow screens: stack the sidebar above the chart so the chart gets the full
+     width instead of being crushed into a sliver on the right. */
+  @media (max-width: 720px) {
+    .layout { flex-direction: column; }
+    .sidebar { width: auto; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--line); }
+    main { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Tachometer</h1>
+  <span class="meta" id="submeta"></span>
+  <span class="meta" style="margin-left:auto" id="fpmeta"></span>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <input type="search" id="search" placeholder="Filter benchmarks…" autocomplete="off">
+    <div class="controls">
+      <button id="mTime" aria-pressed="true">Time</button>
+      <button id="mMem" aria-pressed="false">Memory</button>
+      <button id="scale" aria-pressed="true">Log scale</button>
+    </div>
+    <div id="benchlist"></div>
+    <div class="releases" id="releases" hidden><h3>Releases</h3><div id="releaselist"></div></div>
+  </aside>
+  <main>
+    <div id="chart"></div>
+    <div id="tooltip"></div>
+    <div class="empty" id="empty" hidden></div>
+    <div class="hint" id="hint"></div>
+  </main>
+</div>
+<script src="uPlot.iife.min.js"></script>
+<script>
+"use strict";
+const PALETTE = ["#2563eb","#16a34a","#d1495b","#9333ea","#ea580c","#0891b2","#ca8a04","#db2777"];
+const state = { metric: "time", log: true, selected: new Set(), search: "", data: null, chart: null };
+
+const $ = id => document.getElementById(id);
+const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+
+function prettyTime(ns){ if(ns==null) return "—";
+  if(ns<1e3) return ns.toFixed(0)+" ns"; if(ns<1e6) return (ns/1e3).toPrecision(3)+" µs";
+  if(ns<1e9) return (ns/1e6).toPrecision(3)+" ms"; return (ns/1e9).toPrecision(3)+" s"; }
+function prettyMem(b){ if(b==null) return "—";
+  if(b<1024) return b.toFixed(0)+" B"; if(b<1048576) return (b/1024).toPrecision(3)+" KiB";
+  if(b<1073741824) return (b/1048576).toPrecision(3)+" MiB"; return (b/1073741824).toPrecision(3)+" GiB"; }
+const fmt = v => state.metric === "time" ? prettyTime(v) : prettyMem(v);
+
+// Only build a commit URL from a validated repo URL and a hex sha.
+function commitURL(sha){
+  const base = state.data && state.data.repo_url || "";
+  if(!/^https:\/\/[^\s"'<>]+$/.test(base)) return null;
+  if(!/^[0-9a-f]{7,40}$/.test(sha)) return null;
+  return base.replace(/\/+$/,"") + "/commit/" + sha;
+}
+
+async function load(){
+  let doc;
+  if(window.__TACHOMETER_DATA__){
+    doc = window.__TACHOMETER_DATA__;           // standalone preview build
+  } else {
+    // Manifest (always fresh) lists the shard files; past-year shards are
+    // immutable, so they are fetched with default caching (HTTP 304 on repeat).
+    try {
+      const idxRes = await fetch("./data/index.json?_=" + Date.now(), { cache: "no-store" });
+      const idx = await idxRes.json();
+      const shards = Array.isArray(idx.shards) ? idx.shards : [];
+      // Past-year shards are immutable -> fetch with default (cacheable) request.
+      // Only the latest (current-year) shard mutates, so cache-bust just that one.
+      const latest = shards[shards.length - 1];
+      const ver = encodeURIComponent(idx.generated_at || "");
+      const docs = await Promise.all(shards.map(s =>
+        fetch("./data/" + s + ".json" + (s === latest && ver ? "?v=" + ver : ""))
+          .then(r => r.json()).catch(() => ({ records: [] }))));
+      const records = [].concat(...docs.map(d => (d && Array.isArray(d.records)) ? d.records : []));
+      doc = { package: idx.package, repo_url: idx.repo_url,
+              releases: Array.isArray(idx.releases) ? idx.releases : [],
+              fingerprint: idx.latest_fingerprint || {}, records };
+    } catch(e){ return showEmpty("Could not load <code>data/index.json</code>."); }
+  }
+  if(!doc || !Array.isArray(doc.records) || doc.records.length === 0)
+    return showEmpty("No benchmark history yet. It appears after the tracking workflow runs on the default branch.");
+  doc.records.sort((a,b) => (a.date_unix||0) - (b.date_unix||0));
+  doc.releases = doc.releases || [];
+  // Map commit sha -> release tag (release markers come from the manifest, not
+  // from per-record fields).
+  state.releasesBySha = Object.create(null);
+  for(const rel of doc.releases) if(rel && rel.commit) state.releasesBySha[rel.commit] = rel.tag;
+  state.data = doc;
+  $("title").textContent = (doc.package || "Tachometer") + " — benchmark history";
+  if(/^https:\/\/[^\s"'<>]+$/.test(doc.repo_url || "")){
+    const a = el("a"); a.href = doc.repo_url; a.textContent = "repository"; a.target = "_blank"; a.rel = "noopener";
+    $("submeta").textContent = doc.records.length + " commits · "; $("submeta").appendChild(a);
+  } else { $("submeta").textContent = doc.records.length + " commits"; }
+  const fp = doc.fingerprint || {};
+  $("fpmeta").textContent = [fp.os, fp.arch, fp.julia && ("Julia "+fp.julia), fp.cpu].filter(Boolean).join(" · ");
+  buildKeys(); renderSidebar(); renderReleases(); redraw();
+}
+
+function showEmpty(html){ $("empty").hidden = false; $("empty").innerHTML = html;
+  $("chart").hidden = true; $("hint").textContent = ""; }
+
+function buildKeys(){
+  const set = new Set();
+  for(const r of state.data.records) for(const k in r.benchmarks) set.add(k);
+  state.keys = [...set].sort();
+  if(state.selected.size === 0 && state.keys.length) state.selected.add(state.keys[0]);
+}
+
+function renderSidebar(){
+  const host = $("benchlist"); host.textContent = "";
+  const q = state.search.toLowerCase();
+  const groups = Object.create(null);   // null-proto: keys like "constructor" are safe
+  for(const k of state.keys){
+    if(q && !k.toLowerCase().includes(q)) continue;
+    const g = k.includes("/") ? k.slice(0, k.indexOf("/")) : "";
+    (groups[g] = groups[g] || []).push(k);
+  }
+  for(const g of Object.keys(groups).sort()){
+    const box = el("div","group");
+    if(g){ const h = el("h3"); h.textContent = g; box.appendChild(h); }
+    for(const k of groups[g]){
+      const lab = el("label");
+      const cb = el("input"); cb.type = "checkbox"; cb.checked = state.selected.has(k);
+      cb.addEventListener("change", () => { cb.checked ? state.selected.add(k) : state.selected.delete(k); redraw(); });
+      const span = el("span"); span.textContent = g ? k.slice(g.length+1) : k; span.title = k;
+      lab.appendChild(cb); lab.appendChild(span); box.appendChild(lab);
+    }
+    host.appendChild(box);
+  }
+}
+
+function renderReleases(){
+  const rels = state.data.releases;
+  if(!rels || !rels.length) return;
+  $("releases").hidden = false;
+  const host = $("releaselist"); host.textContent = "";
+  for(const rel of rels.slice().reverse()){
+    const url = commitURL(rel.commit);
+    const a = el("a"); a.textContent = rel.tag + "  ·  " + (rel.commit||"").slice(0,7);
+    if(url){ a.href = url; a.target = "_blank"; a.rel = "noopener"; } else { a.removeAttribute("href"); }
+    host.appendChild(a);
+  }
+}
+
+// Fingerprint identity of a record's measurement regime (CPU/OS/Julia/threads/suite).
+function regimeKey(r){
+  const f = r.fingerprint || {};
+  return [f.os, f.arch, f.julia, f.cpu, f.threads, f.suite].join("|");
+}
+
+// Vertical dashed lines at release commits, drawn under the series.
+function releasePlugin(){
+  return { hooks: { drawClear: u => {
+    const recs = state.data.records, ctx = u.ctx;
+    ctx.save(); ctx.strokeStyle = getVar("--release"); ctx.fillStyle = getVar("--release");
+    ctx.setLineDash([3,3]); ctx.lineWidth = 1; ctx.font = "10px sans-serif";
+    for(let i=0;i<recs.length;i++){ const tag = state.releasesBySha[recs[i].commit]; if(!tag) continue;
+      const x = Math.round(u.valToPos(u.data[0][i], "x", true));
+      if(x < u.bbox.left || x > u.bbox.left+u.bbox.width) continue;
+      ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top+u.bbox.height); ctx.stroke();
+      ctx.fillText(tag, x+3, u.bbox.top+11);
+    }
+    ctx.restore();
+  } } };
+}
+
+// Dotted grey lines where the measurement regime (fingerprint) changed, so a
+// CPU/Julia/suite change is not mistaken for a performance change.
+function regimePlugin(){
+  return { hooks: { drawClear: u => {
+    const recs = state.data.records, ctx = u.ctx;
+    ctx.save(); ctx.strokeStyle = getVar("--muted"); ctx.fillStyle = getVar("--muted");
+    ctx.setLineDash([1,3]); ctx.lineWidth = 1; ctx.font = "10px sans-serif";
+    for(let i=1;i<recs.length;i++){ if(regimeKey(recs[i]) === regimeKey(recs[i-1])) continue;
+      const x = Math.round(u.valToPos(u.data[0][i], "x", true));
+      if(x < u.bbox.left || x > u.bbox.left+u.bbox.width) continue;
+      ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top+u.bbox.height); ctx.stroke();
+      ctx.fillText("env", x+3, u.bbox.top+u.bbox.height-4);
+    }
+    ctx.restore();
+  } } };
+}
+
+function getVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function tooltipPlugin(){
+  const tt = $("tooltip");
+  return { hooks: {
+    setCursor: u => {
+      const idx = u.cursor.idx;
+      if(idx == null || u.cursor.left < 0){ tt.style.display = "none"; return; }
+      const r = state.data.records[idx];
+      tt.textContent = "";
+      const head = el("div","sha"); head.textContent = r.commit.slice(0,7) + " · " + (r.date||"").slice(0,10);
+      tt.appendChild(head);
+      const tag = state.releasesBySha[r.commit];
+      if(tag){ const t = el("div","tag"); t.textContent = "release " + tag; tt.appendChild(t); }
+      const msg = el("div","msg"); msg.textContent = r.message || ""; tt.appendChild(msg);
+      const f = r.fingerprint || {};
+      if(f.julia || f.cpu){ const fpd = el("div","sha"); fpd.textContent = [f.cpu, f.julia && ("Julia "+f.julia)].filter(Boolean).join(" · "); tt.appendChild(fpd); }
+      for(let s=1;s<u.series.length;s++){
+        const ser = u.series[s]; if(ser.show === false) continue;
+        const v = u.data[s][idx];
+        const row = el("div","row");
+        const left = el("span"); const sw = el("span","sw"); sw.style.background = ser.stroke();
+        left.appendChild(sw); left.appendChild(document.createTextNode(ser.label));
+        const right = el("span"); right.textContent = fmt(v);
+        row.appendChild(left); row.appendChild(right); tt.appendChild(row);
+      }
+      const rect = u.over.getBoundingClientRect(), main = u.root.parentNode.getBoundingClientRect();
+      tt.style.display = "block";
+      let left = rect.left - main.left + u.cursor.left + 14;
+      if(left + tt.offsetWidth > main.width) left -= tt.offsetWidth + 28;
+      tt.style.left = left + "px";
+      tt.style.top = (rect.top - main.top + Math.max(0,u.cursor.top) - 10) + "px";
+    }
+  } };
+}
+
+function redraw(){
+  if(!state.data) return;
+  $("empty").hidden = true; $("chart").hidden = false;
+  const recs = state.data.records;
+  let regimes = 0;
+  for(let i=1;i<recs.length;i++) if(regimeKey(recs[i]) !== regimeKey(recs[i-1])) regimes++;
+  const hints = [];
+  if(state.selected.size > 1) hints.push("use log scale to compare different magnitudes");
+  if(regimes > 0) hints.push(regimes + " environment change" + (regimes>1?"s":"") + " (dotted “env” lines) — points across them are not directly comparable");
+  $("hint").textContent = hints.join(" · ");
+  // Prefer the unix commit time (timezone-independent); fall back to parsing the
+  // ISO string for older records that predate that field.
+  const xs = recs.map(r => (r.date_unix != null ? r.date_unix : Date.parse(r.date)/1000));
+  const keys = state.keys.filter(k => state.selected.has(k));
+  const series = [{}];
+  const data = [xs];
+  keys.forEach((k,i) => {
+    data.push(recs.map(r => (r.benchmarks[k] && r.benchmarks[k][state.metric] != null) ? r.benchmarks[k][state.metric] : null));
+    series.push({ label: k, stroke: PALETTE[i % PALETTE.length], width: 1.5,
+                  points: { size: 4 }, spanGaps: true, value: (u,v) => fmt(v) });
+  });
+  const c = $("chart");
+  if(state.chart){ state.chart.destroy(); state.chart = null; }
+  if(!keys.length){ $("hint").textContent = "Select a benchmark on the left."; return; }
+  const opts = {
+    width: c.clientWidth || 800, height: Math.max(360, window.innerHeight - 180),
+    scales: { y: { distr: state.log ? 3 : 1 } },
+    axes: [ axisStyle({}), axisStyle({ values: (u,vals) => vals.map(v => fmt(v)) }) ],
+    series, plugins: [ regimePlugin(), releasePlugin(), tooltipPlugin() ],
+    cursor: { points: { size: 6 } },
+  };
+  state.chart = new uPlot(opts, data, c);
+  c.querySelector(".u-over").addEventListener("click", () => {
+    const idx = state.chart.cursor.idx; if(idx == null) return;
+    const url = commitURL(recs[idx].commit); if(url) window.open(url, "_blank", "noopener");
+  });
+}
+
+function axisStyle(extra){
+  const stroke = getVar("--muted"), grid = getVar("--line");
+  return Object.assign({ stroke, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid } }, extra);
+}
+
+// Controls
+$("search").addEventListener("input", e => { state.search = e.target.value; renderSidebar(); });
+function setMetric(m){ state.metric = m; $("mTime").ariaPressed = m==="time"; $("mMem").ariaPressed = m==="memory"; redraw(); }
+$("mTime").addEventListener("click", () => setMetric("time"));
+$("mMem").addEventListener("click", () => setMetric("memory"));
+$("scale").addEventListener("click", () => { state.log = !state.log; $("scale").ariaPressed = state.log; redraw(); });
+window.addEventListener("resize", () => { if(state.chart) redraw(); });
+// Re-theme uPlot when the system theme changes (CSS vars change; redraw picks them up).
+if(window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => redraw());
+
+load();
+</script>
+</body>
+</html>

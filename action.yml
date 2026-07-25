@@ -1,0 +1,177 @@
+name: "Tachometer"
+description: >-
+  Benchmark a Julia package at two git revisions and produce a compact
+  performance-regression report. This action only *measures* and writes an
+  artifact — posting the PR comment is a separate, trusted job (see
+  examples/report.yml), which keeps it safe to run on untrusted fork PRs.
+author: "Kristoffer Carlsson"
+branding:
+  icon: activity
+  color: green
+
+inputs:
+  julia-version:
+    description: "Julia version to benchmark with (as understood by setup-julia)."
+    default: "1"
+  package:
+    description: "Path to the package to benchmark (a git working copy)."
+    default: "."
+  script:
+    description: "Benchmark entrypoint, relative to `package`. Must define `const SUITE`."
+    default: "benchmark/benchmarks.jl"
+  baseline:
+    description: "Baseline git ref. Defaults to the merge-base of the PR base and head."
+    default: ""
+  target:
+    description: "Target git ref. Defaults to the PR head SHA."
+    default: ""
+  time-tolerance:
+    description: "Relative time change (0.05 = 5%) needed to flag a regression."
+    default: "0.05"
+  memory-tolerance:
+    description: "Relative memory change needed to flag a regression."
+    default: "0.01"
+  time-floor:
+    description: "Absolute time change a regression must also clear, e.g. 1us, 500ns, 2ms."
+    default: "1us"
+  memory-floor:
+    description: "Absolute memory change (bytes) a regression must also clear."
+    default: "0"
+  nruns:
+    description: "Interleaved baseline/target passes. >1 requires every pass to agree."
+    default: "1"
+  threads:
+    description: "JULIA_NUM_THREADS for the benchmark subprocesses."
+    default: "1"
+  fail-on-regression:
+    description: "Exit non-zero (fail the job) when a regression is confirmed."
+    default: "false"
+  release-baseline:
+    description: >-
+      When the target bumps the version in Project.toml, compare against the last
+      release tag (`vX.Y.Z`) instead of the merge-base, to catch regressions that
+      accumulated across the release. No effect unless a version bump is detected.
+    default: "true"
+  marker:
+    description: "Sticky-comment namespace. Give matrix jobs distinct markers."
+    default: "tachometer"
+  noise-history:
+    description: >-
+      Path to a checkout of the default-branch time-series data dir (the `data/`
+      produced by track.yml), used READ-ONLY to derive the per-benchmark noise
+      band. Empty disables the noise model (plain tolerance only).
+    default: ""
+
+outputs:
+  status:
+    description: "One of ok / regressed / not_comparable / errored."
+    value: ${{ steps.run.outputs.status }}
+  regressed:
+    description: "true if a regression was confirmed."
+    value: ${{ steps.run.outputs.regressed }}
+  report:
+    description: "Path to the rendered markdown report."
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    # Pin these to immutable commit SHAs in production (kept as tags here for readability).
+    - uses: julia-actions/setup-julia@v2
+      with:
+        version: ${{ inputs.julia-version }}
+
+    - uses: julia-actions/cache@v2
+
+    - name: Resolve revisions
+      id: refs
+      shell: bash
+      # Values come in via env (never spliced into the script body) so nothing
+      # from the PR context can act as shell syntax.
+      env:
+        PACKAGE: ${{ inputs.package }}
+        BASELINE_IN: ${{ inputs.baseline }}
+        TARGET_IN: ${{ inputs.target }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+        cd "$PACKAGE"
+        base="$BASELINE_IN"
+        target="$TARGET_IN"
+        if [ -z "$target" ]; then
+          target="${PR_HEAD_SHA:-$(git rev-parse HEAD)}"
+        fi
+        if [ -z "$base" ]; then
+          if [ -n "$PR_BASE_SHA" ]; then
+            git fetch --no-tags --depth=200 origin "$PR_BASE_SHA" || true
+            # Empty on failure -> Tachometer reports a yellow "not comparable"
+            # state rather than fabricating a comparison against an unrelated tip.
+            base="$(git merge-base "$PR_BASE_SHA" "$target" 2>/dev/null || true)"
+          else
+            base="$(git rev-parse HEAD~1 2>/dev/null || true)"
+          fi
+        fi
+        echo "baseline=$base" >> "$GITHUB_OUTPUT"
+        echo "target=$target" >> "$GITHUB_OUTPUT"
+        echo "Comparing baseline='$base' against target='$target'"
+
+    - name: Run Tachometer
+      id: run
+      shell: bash
+      env:
+        TACHOMETER_PACKAGE: ${{ inputs.package }}
+        TACHOMETER_SCRIPT: ${{ inputs.script }}
+        TACHOMETER_BASELINE: ${{ steps.refs.outputs.baseline }}
+        TACHOMETER_TARGET: ${{ steps.refs.outputs.target }}
+        TACHOMETER_TIME_TOLERANCE: ${{ inputs.time-tolerance }}
+        TACHOMETER_MEMORY_TOLERANCE: ${{ inputs.memory-tolerance }}
+        TACHOMETER_TIME_FLOOR: ${{ inputs.time-floor }}
+        TACHOMETER_MEMORY_FLOOR: ${{ inputs.memory-floor }}
+        TACHOMETER_NRUNS: ${{ inputs.nruns }}
+        TACHOMETER_THREADS: ${{ inputs.threads }}
+        TACHOMETER_RELEASE_BASELINE: ${{ inputs.release-baseline }}
+        TACHOMETER_MARKER: ${{ inputs.marker }}
+        TACHOMETER_NOISE_HISTORY: ${{ inputs.noise-history }}
+        TACHOMETER_OUTPUT_DIR: ${{ github.workspace }}/tachometer-report
+        TACHOMETER_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        TACHO_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        julia --color=yes -e '
+          using Pkg
+          Pkg.activate(; temp = true)
+          Pkg.develop(PackageSpec(path = ENV["TACHO_PATH"]))
+          Pkg.instantiate()
+          using Tachometer
+          Tachometer.main()
+        '
+
+    - name: Record PR context for the reporter
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="${{ github.workspace }}/tachometer-report"
+        mkdir -p "$dir"
+        echo "${{ github.event.pull_request.number }}" > "$dir/pr-number.txt"
+        echo "${{ github.event.pull_request.head.sha }}" > "$dir/head-sha.txt"
+        echo "${{ inputs.marker }}" > "$dir/marker.txt"
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: tachometer-report-${{ inputs.marker }}
+        path: ${{ github.workspace }}/tachometer-report
+        retention-days: 7
+
+    # Gating runs LAST, after the artifact is safely uploaded, so a gated failure
+    # never prevents the report from being produced or posted.
+    # Do not gate when the benchmark suite itself changed between revisions — the
+    # comparison isn't apples-to-apples, so a "regression" there is advisory only.
+    - name: Gate on regression
+      if: always() && inputs.fail-on-regression == 'true' && steps.run.outputs.regressed == 'true' && steps.run.outputs.suite_changed != 'true'
+      shell: bash
+      run: |
+        echo "::error::Tachometer detected a confirmed performance regression."
+        exit 1

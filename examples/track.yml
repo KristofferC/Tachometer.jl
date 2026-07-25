@@ -1,0 +1,67 @@
+# Record default-branch benchmark results over time and publish a dashboard to
+# GitHub Pages. Runs on push to the default branch (benchmark + publish) and on
+# release tag pushes (refresh the release markers only, no re-benchmark).
+#
+# The dashboard is published under a subdirectory (default: benchmarks/) of the
+# Pages branch, additively, so it coexists with Documenter docs on the same
+# branch. Pages must be set to "Deploy from a branch: gh-pages / root"; the site
+# is then at https://OWNER.github.io/REPO/benchmarks/.
+name: Benchmark tracking
+
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*"]
+
+permissions:
+  contents: write   # to push to the gh-pages branch
+
+concurrency:
+  # Serialize publishes. Share this group with your Documenter deploy workflow if
+  # you want to avoid overlapping pushes entirely (the publisher also retries).
+  group: gh-pages-publish
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history + tags for metadata and release detection
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+      - uses: julia-actions/cache@v2
+
+      - name: Install Tachometer
+        run: |
+          julia --project=.tacho -e '
+            using Pkg
+            Pkg.add(url = "https://github.com/KristofferC/Tachometer.jl")  # pin a rev in production
+            Pkg.instantiate()'
+
+      # Benchmark the pushed commit (skipped on tag pushes — just refresh markers).
+      - name: Record
+        if: github.ref_type != 'tag'
+        env:
+          TACHOMETER_MODE: record
+          TACHOMETER_SCRIPT: benchmark/benchmarks.jl
+          TACHOMETER_RECORD_OUT: ${{ github.workspace }}/tachometer-record.json
+        run: julia --project=.tacho --startup-file=no -e 'using Tachometer; Tachometer.main()'
+
+      - name: Publish to Pages
+        env:
+          REPO: ${{ github.workspace }}
+          PAGES_BRANCH: gh-pages
+          SUBDIR: benchmarks
+          RECORD: ${{ github.ref_type != 'tag' && format('{0}/tachometer-record.json', github.workspace) || '' }}
+          JULIA_PROJECT: ${{ github.workspace }}/.tacho
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          PACKAGE_NAME: ${{ github.event.repository.name }}
+        run: |
+          # The publish script ships inside the installed package.
+          script="$(julia --project=.tacho -e 'using Tachometer; print(joinpath(pkgdir(Tachometer), "scripts", "publish-timeseries.sh"))')"
+          bash "$script"

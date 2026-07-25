@@ -1,0 +1,69 @@
+# Simple single-workflow setup for repos that only benchmark PRs from the same
+# repository (not forks) — e.g. a maintainer-only workflow. It benchmarks and
+# comments in one job.
+#
+# WARNING: do NOT switch this to `pull_request_target` to make it work for forks.
+# That would run untrusted PR code with a write token. For fork support use the
+# split benchmark.yml + report.yml instead.
+name: Benchmarks (simple)
+
+on:
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: tachometer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Benchmark
+    # Same-repo PRs only (fork PRs can't get a write token here anyway).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Read-only noise source: the default-branch time series published by
+      # track.yml, extracted into a fresh dir outside the checkout.
+      - name: Fetch published history (read-only noise source)
+        run: |
+          dest="${RUNNER_TEMP}/tacho-history"
+          rm -rf "$dest"; mkdir -p "$dest"
+          if git fetch --no-tags --depth=1 origin gh-pages 2>/dev/null; then
+            git archive FETCH_HEAD benchmarks/data 2>/dev/null | tar -x -C "$dest" 2>/dev/null || true
+          fi
+        continue-on-error: true
+
+      # Fetch the comment.sh helper from the action repo. This job holds
+      # `pull-requests: write`, so pin `ref` to an immutable commit SHA, not a
+      # mutable tag like v1.
+      - uses: actions/checkout@v4
+        with:
+          repository: KristofferC/Tachometer.jl
+          ref: 0000000000000000000000000000000000000000   # <-- replace with a pinned commit SHA
+          path: .tachometer-action
+
+      - id: bench
+        uses: KristofferC/Tachometer.jl@v1   # pin to a SHA in production
+        with:
+          nruns: "2"
+          noise-history: ${{ runner.temp }}/tacho-history/benchmarks/data
+
+      - name: Post sticky comment
+        if: always() && steps.bench.outputs.report != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash .tachometer-action/scripts/comment.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            "tachometer" \
+            "${{ steps.bench.outputs.report }}"

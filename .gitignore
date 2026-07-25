@@ -1,0 +1,4 @@
+/Manifest.toml
+/tachometer-report/
+/.tachometer/
+*.cov
