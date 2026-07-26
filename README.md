@@ -50,8 +50,9 @@ absolutely large enough, and holds up across repeated runs:
   (default 5%) *and* the absolute change has to exceed `time-floor` (default
   1 µs). The floor is on the change, not on the benchmark's size, so a +40% wiggle
   on a 200 ns benchmark (an 80 ns change) is ignored while a 200 ns → 2 µs change
-  is not. Memory has its own tolerance and byte floor; a benchmark that allocated
-  nothing and now allocates is always reported.
+  is not. Memory has its own tolerance (default 5%) and byte floor, so an
+  incidental allocation change is not reported as a regression; a benchmark that
+  allocated nothing and now allocates is always reported, whatever the tolerance.
 
 - **Repeated runs.** With `nruns > 1` the baseline and target are run
   interleaved, alternating which goes first, and a benchmark is only reported if
@@ -131,6 +132,10 @@ report = compare("path/to/Pkg";
     nruns    = 3,
     noise_history = nothing,
 )
+
+# Benchmark subprocesses log their progress by default (`verbose = true`), which
+# is what tells you where a failing run died; pass `verbose = false` for quiet runs.
+report = compare("."; baseline = "master", verbose = false)
 ```
 
 `baseline`/`target` are git refs; `target` may also be `Tachometer.WORKINGTREE`
@@ -209,10 +214,11 @@ default branch, whose cache every PR can read.
 | `target` | PR head / working tree | Revision under test |
 | `script` | `benchmark/benchmarks.jl` | Suite entrypoint, defines `SUITE` |
 | `time-tolerance` | `0.05` | Relative time change to report |
-| `memory-tolerance` | `0.01` | Relative memory change to report |
+| `memory-tolerance` | `0.05` | Relative memory change to report |
 | `time-floor` | `1us` | Absolute time change also required |
 | `memory-floor` | `0` | Absolute byte change also required |
 | `nruns` | `1` | Interleaved runs; all must agree |
+| `verbose` | `true` | Log each benchmark as it runs (shown if the run fails) |
 | `fail-on-regression` | `false` | Fail the job on a regression |
 | `release-baseline` | `true` | On a version bump, compare against the last release tag |
 | `history` | — | Path to the noise-history file |

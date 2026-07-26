@@ -6,8 +6,10 @@
 #     change to clear `time_floor` nanoseconds. The floor is on the change, not
 #     the benchmark's size: with a 1 µs floor a 100 ns -> 1.5 µs change trips it,
 #     a 100 ns -> 500 ns change does not.
-#   * Memory has a relative + absolute-byte gate; a zero-allocation baseline
-#     turning non-zero is always a regression.
+#   * Memory has a relative + absolute-byte gate (`memory_tolerance` defaults to
+#     5%, so a small bookkeeping change is not reported even though allocation
+#     counts are deterministic); a zero-allocation baseline turning non-zero is
+#     always a regression, regardless of tolerance.
 #   * With `nruns > 1` the verdict must hold in every run; `confirmations` records
 #     how many runs agreed.
 
@@ -15,13 +17,17 @@ using Statistics: median
 
 """
     compare(repo; baseline, target=WORKINGTREE, script="benchmark/benchmarks.jl",
-            time_tolerance=0.05, memory_tolerance=0.01,
+            time_tolerance=0.05, memory_tolerance=0.05,
             time_floor="1us", memory_floor=0, nruns=1,
-            env=Dict(), threads=1, retune=false, run_url="", marker="tachometer") -> Report
+            env=Dict(), threads=1, retune=false, verbose=true,
+            run_url="", marker="tachometer") -> Report
 
 Benchmark `repo` (a path to a git working copy of the package) at two revisions
 and report the performance difference. `baseline`/`target` are git refs, or the
 [`WORKINGTREE`](@ref) sentinel for the live working tree.
+
+`verbose` (default `true`) makes each benchmark subprocess log its progress, so a
+failing run's log says which benchmark it died on; set it to `false` for quiet runs.
 """
 function compare(
         repo::AbstractString;
@@ -29,13 +35,14 @@ function compare(
         target = WORKINGTREE,
         script::AbstractString = "benchmark/benchmarks.jl",
         time_tolerance::Real = 0.05,
-        memory_tolerance::Real = 0.01,
+        memory_tolerance::Real = 0.05,
         time_floor = "1us",
         memory_floor = 0,
         nruns::Integer = 1,
         env::AbstractDict = Dict{String, String}(),
         threads::Int = 1,
         retune::Bool = false,
+        verbose::Bool = true,
         run_url::AbstractString = "",
         marker::AbstractString = "tachometer",
         noise_history = nothing,   # path to the default-branch time-series data dir (read-only)
@@ -72,11 +79,11 @@ function compare(
     for i in 1:nruns
         first_baseline = isodd(i)
         if first_baseline
-            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune))
-            push!(target_runs, run_revision(repo, target, script; env, threads, retune))
+            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune, verbose))
+            push!(target_runs, run_revision(repo, target, script; env, threads, retune, verbose))
         else
-            push!(target_runs, run_revision(repo, target, script; env, threads, retune))
-            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune))
+            push!(target_runs, run_revision(repo, target, script; env, threads, retune, verbose))
+            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune, verbose))
         end
     end
 

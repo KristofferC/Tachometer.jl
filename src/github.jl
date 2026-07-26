@@ -90,7 +90,7 @@ function report_from_dict(d)
         target_sha = _str(get(md, "target_sha", "")), julia_version = _str(get(md, "julia_version", "")),
         estimator = _str(get(md, "estimator", "minimum")),
         time_tolerance = _num_or(get(md, "time_tolerance", nothing), 0.05),
-        memory_tolerance = _num_or(get(md, "memory_tolerance", nothing), 0.01),
+        memory_tolerance = _num_or(get(md, "memory_tolerance", nothing), 0.05),
         time_floor_ns = _num_or(get(md, "time_floor_ns", nothing), 1000.0),
         memory_floor_bytes = _num_or(get(md, "memory_floor_bytes", nothing), 0.0),
         nruns = round(Int, _num_or(get(md, "nruns", nothing), 1)),

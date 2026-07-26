@@ -130,15 +130,20 @@ function _script_hash(dir::AbstractString, script::AbstractString)
 end
 
 """
-    run_revision(repo, rev, script; env, threads, retune, tune_samples) -> RevisionRun
+    run_revision(repo, rev, script; env, threads, retune, verbose) -> RevisionRun
 
 Run the suite for one revision. Never mutates `repo`.
+
+`verbose` (default `true`) is passed to `BenchmarkTools.run`, so the subprocess
+log names each benchmark as it is executed. The log is only surfaced when the run
+fails, where that progress is what tells you *which* benchmark broke or hung.
 """
 function run_revision(
         repo::AbstractString, rev, script::AbstractString;
         env::AbstractDict = Dict{String, String}(),
         threads::Int = 1,
         retune::Bool = false,
+        verbose::Bool = true,
     )
     # Any failure (bad ref, worktree/subprocess/deserialisation error) becomes a
     # clean `ok = false` run so the caller can report a yellow state instead of
@@ -170,7 +175,7 @@ function run_revision(
                 "benchmark script `$script` not found at revision $(_short(sha))")
 
         outfile = tempname() * ".json"
-        driver = _write_driver(srcdir, script, outfile, retune)
+        driver = _write_driver(srcdir, script, outfile, retune, verbose)
         proc = _run_julia(driver, _subprocess_env(env, threads))
         if !success(proc.code)
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false, _tail(proc.log))
@@ -215,7 +220,7 @@ end
 
 # The subprocess driver. It builds an ephemeral project (so the caller's repo is
 # untouched), dev-installs the package from `srcdir`, runs the suite and saves it.
-function _write_driver(srcdir, script, outfile, retune)
+function _write_driver(srcdir, script, outfile, retune, verbose)
     benchdir = dirname(joinpath(srcdir, script))
     scriptpath = joinpath(srcdir, script)
     code = """
@@ -225,6 +230,7 @@ function _write_driver(srcdir, script, outfile, retune)
     const _SCRIPT = $(repr(scriptpath))
     const _OUT = $(repr(outfile))
     const _RETUNE = $(repr(retune))
+    const _VERBOSE = $(repr(verbose))
 
     env = mktempdir(; prefix = "tachometer_env_")
     # Seed the ephemeral environment from the suite's own Project.toml when it
@@ -257,7 +263,7 @@ function _write_driver(srcdir, script, outfile, retune)
         tune!(suite)
     end
 
-    results = run(suite; verbose = false)
+    results = run(suite; verbose = _VERBOSE)
     BenchmarkTools.save(_OUT, results)
     """
     path = tempname() * ".jl"

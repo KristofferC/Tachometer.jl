@@ -29,8 +29,8 @@ inputs:
     description: "Relative time change (0.05 = 5%) needed to flag a regression."
     default: "0.05"
   memory-tolerance:
-    description: "Relative memory change needed to flag a regression."
-    default: "0.01"
+    description: "Relative memory change (0.05 = 5%) needed to flag a regression."
+    default: "0.05"
   time-floor:
     description: "Absolute time change a regression must also clear, e.g. 1us, 500ns, 2ms."
     default: "1us"
@@ -43,6 +43,11 @@ inputs:
   threads:
     description: "JULIA_NUM_THREADS for the benchmark subprocesses."
     default: "1"
+  verbose:
+    description: >-
+      Log each benchmark as it runs in the benchmark subprocess. The log is only
+      shown when a run fails, where it identifies the benchmark that broke or hung.
+    default: "true"
   fail-on-regression:
     description: "Exit non-zero (fail the job) when a regression is confirmed."
     default: "false"
@@ -130,6 +135,7 @@ runs:
         TACHOMETER_MEMORY_FLOOR: ${{ inputs.memory-floor }}
         TACHOMETER_NRUNS: ${{ inputs.nruns }}
         TACHOMETER_THREADS: ${{ inputs.threads }}
+        TACHOMETER_VERBOSE: ${{ inputs.verbose }}
         TACHOMETER_RELEASE_BASELINE: ${{ inputs.release-baseline }}
         TACHOMETER_MARKER: ${{ inputs.marker }}
         TACHOMETER_NOISE_HISTORY: ${{ inputs.noise-history }}

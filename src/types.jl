@@ -81,7 +81,7 @@ function Meta(;
         julia_version::AbstractString = string(VERSION),
         estimator::AbstractString = "minimum",
         time_tolerance::Real = 0.05,
-        memory_tolerance::Real = 0.01,
+        memory_tolerance::Real = 0.05,
         time_floor_ns::Real = 1000.0,
         memory_floor_bytes::Real = 0.0,
         nruns::Integer = 1,

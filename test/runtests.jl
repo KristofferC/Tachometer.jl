@@ -6,7 +6,7 @@ using Tachometer: Estimate, Measurement, Meta, Report, RevisionRun, NoiseModel,
     _judge, _classify_time, _classify_memory, _combine, _as_ns, build_noise_from_history,
     effective_time_tolerance, prettytime, prettymemory, _signed_pct,
     regressions, improvements, invariants, added, removed, suppressed,
-    project_version, last_release_tag, _release_baseline, WORKINGTREE,
+    project_version, last_release_tag, _release_baseline, WORKINGTREE, _write_driver,
     load_index, load_shard, load_all_records, _releases, _shard_name, write_dashboard,
     report_to_dict, report_from_dict
 
@@ -76,6 +76,33 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         # Memory shrinks -> improvement (time unchanged).
         ms = judge(mkrun("g/a" => (10_000, 1024)), mkrun("g/a" => (10_000, 512)))
         @test only(ms).verdict === :improvement
+
+        # Memory tolerance: a change inside the band is invariant, one past it is a
+        # regression. At the 5% default, +3% is noise-level bookkeeping and +10% is not.
+        memjudge(b, t; tol) = _judge([mkrun("g/a" => (10_000, b))], [mkrun("g/a" => (10_000, t))],
+            NoiseModel(); time_tolerance = 0.05, memory_tolerance = tol,
+            time_floor = 1000.0, memory_floor = 0.0, nruns = 1)
+        @test only(memjudge(1000, 1030; tol = 0.05)).verdict === :invariant
+        @test only(memjudge(1000, 1100; tol = 0.05)).verdict === :regression
+        @test only(memjudge(1000, 970; tol = 0.05)).verdict === :invariant
+        @test only(memjudge(1000, 900; tol = 0.05)).verdict === :improvement
+        # The same +3% is a regression at the tighter tolerance, so the knob still bites.
+        @test only(memjudge(1000, 1030; tol = 0.01)).verdict === :regression
+    end
+
+    @testset "benchmark driver" begin
+        # `verbose` reaches the subprocess's `run(suite; verbose = ...)` call, so a
+        # failing run's log names the benchmark it died on.
+        dir = mktempdir()
+        mkpath(joinpath(dir, "benchmark"))
+        write(joinpath(dir, "benchmark", "benchmarks.jl"), "const SUITE = nothing\n")
+        for v in (true, false)
+            path = _write_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "out.json"), false, v)
+            code = read(path, String)
+            @test occursin("const _VERBOSE = $(v)", code)
+            @test occursin("run(suite; verbose = _VERBOSE)", code)
+            rm(path; force = true)
+        end
     end
 
     @testset "added / removed" begin
