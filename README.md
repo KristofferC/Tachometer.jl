@@ -50,8 +50,15 @@ absolutely large enough, and holds up across repeated runs:
   (default 5%) *and* the absolute change has to exceed `time-floor` (default
   1 µs). The floor is on the change, not on the benchmark's size, so a +40% wiggle
   on a 200 ns benchmark (an 80 ns change) is ignored while a 200 ns → 2 µs change
-  is not. Memory has its own tolerance and byte floor; a benchmark that allocated
-  nothing and now allocates is always reported.
+  is not. Memory has its own tolerance (default 5%) and byte floor, so an
+  incidental allocation change is not reported as a regression; a benchmark that
+  allocated nothing and now allocates is always reported, whatever the tolerance.
+
+- **Trade-offs are not regressions.** A benchmark that got *faster* while
+  allocating more is reported as 🟡 "memory trade-off": it is shown in the table
+  for a human to weigh, but it does not make the comment red and does not fail a
+  gated build. The reverse — slower but leaner — stays a regression, so saving a
+  byte never buys the right to be slower unnoticed.
 
 - **Repeated runs.** With `nruns > 1` the baseline and target are run
   interleaved, alternating which goes first, and a benchmark is only reported if
@@ -131,6 +138,11 @@ report = compare("path/to/Pkg";
     nruns    = 3,
     noise_history = nothing,
 )
+
+# Benchmark subprocesses name each benchmark as they run it (`verbose = true`) and
+# that output is streamed as it is produced (`stream`, following `verbose`), so a
+# long comparison can be watched. Both off for a quiet run:
+report = compare("."; baseline = "master", verbose = false)
 ```
 
 `baseline`/`target` are git refs; `target` may also be `Tachometer.WORKINGTREE`
@@ -209,10 +221,11 @@ default branch, whose cache every PR can read.
 | `target` | PR head / working tree | Revision under test |
 | `script` | `benchmark/benchmarks.jl` | Suite entrypoint, defines `SUITE` |
 | `time-tolerance` | `0.05` | Relative time change to report |
-| `memory-tolerance` | `0.01` | Relative memory change to report |
+| `memory-tolerance` | `0.05` | Relative memory change to report |
 | `time-floor` | `1us` | Absolute time change also required |
 | `memory-floor` | `0` | Absolute byte change also required |
 | `nruns` | `1` | Interleaved runs; all must agree |
+| `verbose` | `true` | Stream each benchmark's progress to the job log as it runs |
 | `fail-on-regression` | `false` | Fail the job on a regression |
 | `release-baseline` | `true` | On a version bump, compare against the last release tag |
 | `history` | — | Path to the noise-history file |

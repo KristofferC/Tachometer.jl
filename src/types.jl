@@ -18,8 +18,11 @@ struct Estimate
 end
 
 # Verdict for a single benchmark. One of:
-#   :regression :improvement :invariant :added :removed :uncompared
+#   :regression :improvement :invariant :tradeoff :added :removed :uncompared
 # and a `reason` describing what moved: :time, :memory, :both, :none.
+#
+# `:tradeoff` is "faster, but allocates more": reported for a human to weigh, but
+# not counted as a regression and never a reason to fail a build.
 
 """
     Measurement
@@ -81,7 +84,7 @@ function Meta(;
         julia_version::AbstractString = string(VERSION),
         estimator::AbstractString = "minimum",
         time_tolerance::Real = 0.05,
-        memory_tolerance::Real = 0.01,
+        memory_tolerance::Real = 0.05,
         time_floor_ns::Real = 1000.0,
         memory_floor_bytes::Real = 0.0,
         nruns::Integer = 1,
@@ -123,7 +126,8 @@ end
 regressions(r::Report)  = filter(m -> m.verdict === :regression, r.measurements)
 improvements(r::Report) = filter(m -> m.verdict === :improvement, r.measurements)
 invariants(r::Report)   = filter(m -> m.verdict === :invariant, r.measurements)
+tradeoffs(r::Report)    = filter(m -> m.verdict === :tradeoff, r.measurements)
 added(r::Report)        = filter(m -> m.verdict === :added, r.measurements)
 removed(r::Report)      = filter(m -> m.verdict === :removed, r.measurements)
 suppressed(r::Report)   = filter(m -> m.suppressed, r.measurements)
-compared(r::Report)     = filter(m -> m.verdict in (:regression, :improvement, :invariant), r.measurements)
+compared(r::Report)     = filter(m -> m.verdict in (:regression, :improvement, :invariant, :tradeoff), r.measurements)

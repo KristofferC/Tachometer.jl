@@ -25,16 +25,20 @@ function main(; io = stdout)
     target = target_raw in ("workingtree", "working-tree", "") ? WORKINGTREE : target_raw
     script = _env("TACHOMETER_SCRIPT", "benchmark/benchmarks.jl")
     outdir = _env("TACHOMETER_OUTPUT_DIR", joinpath(repo, "tachometer-report"))
+    verbose = _envb("TACHOMETER_VERBOSE", true)
 
     report = compare(repo;
         baseline, target, script,
         time_tolerance = _envf("TACHOMETER_TIME_TOLERANCE", 0.05),
-        memory_tolerance = _envf("TACHOMETER_MEMORY_TOLERANCE", 0.01),
+        memory_tolerance = _envf("TACHOMETER_MEMORY_TOLERANCE", 0.05),
         time_floor = _env("TACHOMETER_TIME_FLOOR", "1us"),
         memory_floor = _envf("TACHOMETER_MEMORY_FLOOR", 0.0),
         nruns = _envi("TACHOMETER_NRUNS", 1),
         threads = _envi("TACHOMETER_THREADS", 1),
         retune = _envb("TACHOMETER_RETUNE", false),
+        verbose,
+        stream = _envb("TACHOMETER_STREAM", verbose),
+        io,
         run_url = _env("TACHOMETER_RUN_URL", ""),
         marker = _env("TACHOMETER_MARKER", "tachometer"),
         noise_history = _emptyto_nothing(_env("TACHOMETER_NOISE_HISTORY", "")),
@@ -79,10 +83,14 @@ end
 function _main_record(io)
     repo = _env("TACHOMETER_PACKAGE", pwd())
     out = _env("TACHOMETER_RECORD_OUT", joinpath(repo, "tachometer-record.json"))
+    verbose = _envb("TACHOMETER_VERBOSE", true)
     rec = record_run(repo;
         script = _env("TACHOMETER_SCRIPT", "benchmark/benchmarks.jl"),
         threads = _envi("TACHOMETER_THREADS", 1),
         retune = _envb("TACHOMETER_RETUNE", false),
+        verbose,
+        stream = _envb("TACHOMETER_STREAM", verbose),
+        io,
     )
     mkpath(dirname(abspath(out)))
     open(out, "w") do f

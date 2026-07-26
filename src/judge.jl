@@ -6,8 +6,11 @@
 #     change to clear `time_floor` nanoseconds. The floor is on the change, not
 #     the benchmark's size: with a 1 µs floor a 100 ns -> 1.5 µs change trips it,
 #     a 100 ns -> 500 ns change does not.
-#   * Memory has a relative + absolute-byte gate; a zero-allocation baseline
-#     turning non-zero is always a regression.
+#   * Getting faster while allocating more is a `:tradeoff`, not a regression.
+#   * Memory has a relative + absolute-byte gate (`memory_tolerance` defaults to
+#     5%, so a small bookkeeping change is not reported even though allocation
+#     counts are deterministic); a zero-allocation baseline turning non-zero is
+#     always a regression, regardless of tolerance.
 #   * With `nruns > 1` the verdict must hold in every run; `confirmations` records
 #     how many runs agreed.
 
@@ -15,13 +18,19 @@ using Statistics: median
 
 """
     compare(repo; baseline, target=WORKINGTREE, script="benchmark/benchmarks.jl",
-            time_tolerance=0.05, memory_tolerance=0.01,
+            time_tolerance=0.05, memory_tolerance=0.05,
             time_floor="1us", memory_floor=0, nruns=1,
-            env=Dict(), threads=1, retune=false, run_url="", marker="tachometer") -> Report
+            env=Dict(), threads=1, retune=false, verbose=true, stream=verbose,
+            run_url="", marker="tachometer") -> Report
 
 Benchmark `repo` (a path to a git working copy of the package) at two revisions
 and report the performance difference. `baseline`/`target` are git refs, or the
 [`WORKINGTREE`](@ref) sentinel for the live working tree.
+
+`verbose` (default `true`) makes each benchmark subprocess name the benchmarks as
+it runs them, and `stream` (following `verbose`) forwards that output to `io` as
+it is produced, so a long comparison can be watched instead of going silent until
+it finishes. Set both to `false` for quiet runs.
 """
 function compare(
         repo::AbstractString;
@@ -29,13 +38,16 @@ function compare(
         target = WORKINGTREE,
         script::AbstractString = "benchmark/benchmarks.jl",
         time_tolerance::Real = 0.05,
-        memory_tolerance::Real = 0.01,
+        memory_tolerance::Real = 0.05,
         time_floor = "1us",
         memory_floor = 0,
         nruns::Integer = 1,
         env::AbstractDict = Dict{String, String}(),
         threads::Int = 1,
         retune::Bool = false,
+        verbose::Bool = true,
+        stream::Bool = verbose,
+        io::IO = stdout,
         run_url::AbstractString = "",
         marker::AbstractString = "tachometer",
         noise_history = nothing,   # path to the default-branch time-series data dir (read-only)
@@ -71,12 +83,13 @@ function compare(
     # conditions (thermal, host load), alternating order pass to pass.
     for i in 1:nruns
         first_baseline = isodd(i)
+        stream && nruns > 1 && println(io, "[tachometer] pass $(i)/$(nruns)")
         if first_baseline
-            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune))
-            push!(target_runs, run_revision(repo, target, script; env, threads, retune))
+            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune, verbose, stream, io))
+            push!(target_runs, run_revision(repo, target, script; env, threads, retune, verbose, stream, io))
         else
-            push!(target_runs, run_revision(repo, target, script; env, threads, retune))
-            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune))
+            push!(target_runs, run_revision(repo, target, script; env, threads, retune, verbose, stream, io))
+            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune, verbose, stream, io))
         end
     end
 
@@ -121,7 +134,7 @@ function compare(
         return Report(:not_comparable, measurements, meta,
             "No benchmarks were found to compare.")
     end
-    comparable = any(m -> m.verdict in (:regression, :improvement, :invariant), measurements)
+    comparable = any(m -> m.verdict in (:regression, :improvement, :invariant, :tradeoff), measurements)
     if !comparable
         return Report(:not_comparable, measurements, meta,
             "The two revisions share no benchmarks in common.")
@@ -179,6 +192,7 @@ function _judge(baseline_runs, target_runs, model::NoiseModel; time_tolerance, m
 
         verdict, reason = _combine(time_v, mem_v)
         conf = verdict === :regression ? (reason === :memory ? mem_conf : time_conf) :
+            verdict === :tradeoff ? min(time_conf, mem_conf) :   # both halves must hold
             verdict === :improvement ? max(time_conf, mem_conf) : length(pairs)
         push!(ms, Measurement(key, be, te, tr, mr, verdict, reason, conf, nruns, eff_tol, suppressed))
     end
@@ -246,11 +260,20 @@ function _classify_memory(pairs, tol, floor_bytes, nruns)
 end
 
 # A regression anywhere wins; otherwise an improvement; otherwise invariant.
+#
+# The one exception is a benchmark that got *faster* while allocating more: that
+# is a deliberate trade-off far more often than it is a defect, so it becomes
+# `:tradeoff` — surfaced in the report for a human to weigh, but not a regression
+# and not something to fail a build over. The reverse (slower, but leaner) stays a
+# regression: time is the headline metric, and a byte saved must not buy the right
+# to be slower unnoticed.
 function _combine(time_v, mem_v)
     if time_v === :regression && mem_v === :regression
         return :regression, :both
     elseif time_v === :regression
         return :regression, :time
+    elseif mem_v === :regression && time_v === :improvement
+        return :tradeoff, :memory
     elseif mem_v === :regression
         return :regression, :memory
     elseif time_v === :improvement && mem_v === :improvement
