@@ -24,7 +24,7 @@ function render(r::Report; max_rows::Int = 8, byte_limit::Int = 60000)
     println(io)
     _subtitle(io, r)
 
-    if r.status === :regressed || !isempty(improvements(r))
+    if r.status === :regressed || !isempty(improvements(r)) || !isempty(tradeoffs(r))
         println(io)
         _changes_table(io, r, max_rows)
     end
@@ -53,14 +53,18 @@ end
 # --- pieces ----------------------------------------------------------------
 
 function _header(io, r::Report)
+    ntrade = length(tradeoffs(r))
+    trade = ntrade == 0 ? "" : "$(ntrade) memory trade-off$(_s(ntrade))"
     if r.status === :ok
         nimp = length(improvements(r))
-        extra = nimp == 0 ? "" : " ($(nimp) improvement$(_s(nimp)) 🟢)"
+        bits = filter(!isempty, [nimp == 0 ? "" : "$(nimp) improvement$(_s(nimp)) 🟢", trade])
+        extra = isempty(bits) ? "" : " (" * join(bits, ", ") * ")"
         println(io, "### 🟢 Tachometer — no performance regressions detected", extra)
     elseif r.status === :regressed
         nreg = length(regressions(r))
         nimp = length(improvements(r))
-        extra = nimp == 0 ? "" : ", $(nimp) improvement$(_s(nimp))"
+        bits = filter(!isempty, [nimp == 0 ? "" : "$(nimp) improvement$(_s(nimp))", trade])
+        extra = isempty(bits) ? "" : ", " * join(bits, ", ")
         println(io, "### 🔴 Tachometer — $(nreg) regression$(_s(nreg))$(extra)")
     elseif r.status === :not_comparable
         println(io, "### 🟡 Tachometer — nothing to compare")
@@ -83,7 +87,11 @@ function _subtitle(io, r::Report)
     n = length(compared(r))
     parts = String[]
     push!(parts, "$(n) benchmark$(_s(n)) compared")
-    push!(parts, "`$(_safetext(_short(m.baseline_sha)))` → `$(_safetext(_short(m.target_sha)))`")
+    # Nothing ran (no baseline, or the suite never started): skip the arrow rather
+    # than printing a pair of empty backticks.
+    if !isempty(m.baseline_sha) || !isempty(m.target_sha)
+        push!(parts, "$(_sha_or_ref(m.baseline_sha, m.baseline_ref)) → $(_sha_or_ref(m.target_sha, m.target_ref))")
+    end
     push!(parts, "Julia $(_safetext(m.julia_version))")
     push!(parts, "$(_pct0(m.time_tolerance)) tolerance")
     m.nruns > 1 && push!(parts, "$(m.nruns)× runs")
@@ -102,24 +110,30 @@ function _subtitle(io, r::Report)
     return
 end
 
-# Single table of everything that moved: regressions (worst first), then
-# improvements. One icon per row.
+# Single table of everything that moved: regressions (worst first), then memory
+# trade-offs, then improvements. One icon per row.
 function _changes_table(io, r::Report, max_rows::Int)
     regs = sort(regressions(r); by = m -> -_sortkey(m))   # biggest regression first
+    trds = sort(tradeoffs(r); by = m -> -_sortkey(m))
     imps = sort(improvements(r); by = m -> -_sortkey(m))  # biggest improvement first
-    rows = vcat(regs, imps)
+    rows = vcat(regs, trds, imps)
 
     shown = rows[1:min(max_rows, length(rows))]
     println(io, "| | Benchmark | Time | Memory |")
     println(io, "|:--:|:--|:--|:--|")
     for m in shown
-        icon = m.verdict === :regression ? "🔴" : "🟢"
-        println(io, "| $icon | `$(_safekey(m.key))` | $(_time_cell(m)) | $(_mem_cell(m)) |")
+        println(io, "| $(_icon(m)) | `$(_safekey(m.key))` | $(_time_cell(m)) | $(_mem_cell(m)) |")
+    end
+    if !isempty(trds)
+        println(io, "\n<sub>🟡 faster, but allocates more — a trade-off to weigh, not counted as a regression.</sub>")
     end
     hidden = length(rows) - length(shown)
     hidden > 0 && println(io, "\n<sub>… and $(hidden) more change$(_s(hidden)) in the full results below.</sub>")
     return
 end
+
+_icon(m::Measurement) = m.verdict === :regression ? "🔴" :
+    m.verdict === :improvement ? "🟢" : m.verdict === :tradeoff ? "🟡" : "⚪️"
 
 function _full_details(io, r::Report)
     rows = compared(r)
@@ -129,8 +143,7 @@ function _full_details(io, r::Report)
     println(io, "| | Benchmark | Time | Memory |")
     println(io, "|:--:|:--|:--|:--|")
     for m in sort(rows; by = x -> x.key)
-        icon = m.verdict === :regression ? "🔴" : m.verdict === :improvement ? "🟢" : "⚪️"
-        println(io, "| $icon | `$(_safekey(m.key))` | $(_time_cell(m)) | $(_mem_cell(m)) |")
+        println(io, "| $(_icon(m)) | `$(_safekey(m.key))` | $(_time_cell(m)) | $(_mem_cell(m)) |")
     end
     println(io, "\n</details>")
     return
@@ -171,12 +184,36 @@ function _uncompared(io, r::Report)
     return
 end
 
+# "baseline `389ecb7` (master)" — the ref in parentheses only earns its place when
+# it names something the SHA doesn't. The action resolves refs to SHAs before
+# calling, so the common case would otherwise read "`389ecb7` (389ecb7…)".
+function _revision_part(label, sha, ref)
+    part = "$(label) $(_sha_or_ref(sha, ref))"
+    (isempty(sha) || isempty(strip(ref)) || _same_commit(strip(ref), sha)) && return part
+    return part * " ($(_safetext(strip(ref))))"
+end
+
+# The SHA when there is one, else whatever name we have for the revision.
+_sha_or_ref(sha, ref) = isempty(sha) ?
+    (isempty(strip(ref)) ? "unknown" : "`$(_safetext(strip(ref)))`") :
+    "`$(_safetext(_short(sha)))`"
+
+# Whether `ref` is just the commit written out: a hex string that is a prefix of
+# the SHA, or of which the SHA is a prefix (either side may be abbreviated).
+function _same_commit(ref::AbstractString, sha::AbstractString)
+    sha = first(split(sha, '+'))   # drop the "+dirty" marker on a working-tree target
+    (isempty(ref) || isempty(sha)) && return false
+    occursin(r"^[0-9a-fA-F]{4,40}$", ref) || return false
+    a, b = lowercase(ref), lowercase(sha)
+    return startswith(a, b) || startswith(b, a)
+end
+
 function _footer(r::Report)
     m = r.meta
     io = IOBuffer()
     parts = String[]
-    push!(parts, "baseline `$(_safetext(_short(m.baseline_sha)))` ($(_safetext(m.baseline_ref)))")
-    push!(parts, "target `$(_safetext(_short(m.target_sha)))` ($(_safetext(m.target_ref)))")
+    push!(parts, _revision_part("baseline", m.baseline_sha, m.baseline_ref))
+    push!(parts, _revision_part("target", m.target_sha, m.target_ref))
     push!(parts, "Julia $(_safetext(m.julia_version))")
     push!(parts, "min estimator")
     push!(parts, "tol $(_pct0(m.time_tolerance))/$(_pct0(m.memory_tolerance))")

@@ -130,13 +130,15 @@ function _script_hash(dir::AbstractString, script::AbstractString)
 end
 
 """
-    run_revision(repo, rev, script; env, threads, retune, verbose) -> RevisionRun
+    run_revision(repo, rev, script; env, threads, retune, verbose, stream, io) -> RevisionRun
 
 Run the suite for one revision. Never mutates `repo`.
 
 `verbose` (default `true`) is passed to `BenchmarkTools.run`, so the subprocess
-log names each benchmark as it is executed. The log is only surfaced when the run
-fails, where that progress is what tells you *which* benchmark broke or hung.
+names each benchmark as it executes it. `stream` (default: follows `verbose`)
+forwards the subprocess output to `io` line by line *while it runs*, so a long
+suite can be watched as it progresses instead of going quiet for minutes. The
+output is captured either way; the captured tail is what a failed run reports.
 """
 function run_revision(
         repo::AbstractString, rev, script::AbstractString;
@@ -144,6 +146,8 @@ function run_revision(
         threads::Int = 1,
         retune::Bool = false,
         verbose::Bool = true,
+        stream::Bool = verbose,
+        io::IO = stdout,
     )
     # Any failure (bad ref, worktree/subprocess/deserialisation error) becomes a
     # clean `ok = false` run so the caller can report a yellow state instead of
@@ -176,7 +180,10 @@ function run_revision(
 
         outfile = tempname() * ".json"
         driver = _write_driver(srcdir, script, outfile, retune, verbose)
-        proc = _run_julia(driver, _subprocess_env(env, threads))
+        # Each streamed line is tagged with the revision being measured, so the
+        # interleaved baseline/target passes of a `compare` stay tellable apart.
+        proc = _run_julia(driver, _subprocess_env(env, threads);
+            stream, io, prefix = "[$(_short(sha))] ")
         if !success(proc.code)
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false, _tail(proc.log))
         end
@@ -271,19 +278,33 @@ function _write_driver(srcdir, script, outfile, retune, verbose)
     return path
 end
 
-function _run_julia(driver, env)
+function _run_julia(driver, env; stream::Bool = false, io::IO = stdout, prefix::AbstractString = "")
     # Use the full julia_cmd so a custom sysimage (-J) and similar flags survive.
     # The driver activates its own temp project, so no --project here.
     julia = Base.julia_cmd()
     buf = IOBuffer()
-    cmd = pipeline(setenv(`$julia --startup-file=no $driver`, env);
-        stdout = buf, stderr = buf)
-    code = try
-        run(cmd; wait = true)
-    catch e
-        e isa ProcessFailedException ? e.procs[1] : rethrow()
+    # stdout and stderr share one pipe so the log keeps them in the order they
+    # were written, and a reader task drains it as the subprocess writes: it must
+    # never fill, or the subprocess would block on a full pipe and hang.
+    out = Pipe()
+    cmd = pipeline(setenv(`$julia --startup-file=no $driver`, env); stdout = out, stderr = out)
+    proc = run(cmd; wait = false)
+    close(out.in)   # the parent holds no write end, so the reader sees EOF at exit
+    reader = @async try
+        for line in eachline(out)
+            println(buf, line)
+            if stream
+                println(io, prefix, line)
+                flush(io)
+            end
+        end
+    catch
+        # A broken pipe must not take the run down: the exit status and whatever
+        # was captured before the break are still the useful signal.
     end
-    return (; code, log = String(take!(buf)))
+    wait(proc)
+    wait(reader)
+    return (; code = proc, log = String(take!(buf)))
 end
 
 success(code::Base.Process) = code.exitcode == 0

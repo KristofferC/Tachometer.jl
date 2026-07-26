@@ -54,6 +54,12 @@ absolutely large enough, and holds up across repeated runs:
   incidental allocation change is not reported as a regression; a benchmark that
   allocated nothing and now allocates is always reported, whatever the tolerance.
 
+- **Trade-offs are not regressions.** A benchmark that got *faster* while
+  allocating more is reported as 🟡 "memory trade-off": it is shown in the table
+  for a human to weigh, but it does not make the comment red and does not fail a
+  gated build. The reverse — slower but leaner — stays a regression, so saving a
+  byte never buys the right to be slower unnoticed.
+
 - **Repeated runs.** With `nruns > 1` the baseline and target are run
   interleaved, alternating which goes first, and a benchmark is only reported if
   every run agrees. This costs time but removes most one-off blips.
@@ -133,8 +139,9 @@ report = compare("path/to/Pkg";
     noise_history = nothing,
 )
 
-# Benchmark subprocesses log their progress by default (`verbose = true`), which
-# is what tells you where a failing run died; pass `verbose = false` for quiet runs.
+# Benchmark subprocesses name each benchmark as they run it (`verbose = true`) and
+# that output is streamed as it is produced (`stream`, following `verbose`), so a
+# long comparison can be watched. Both off for a quiet run:
 report = compare("."; baseline = "master", verbose = false)
 ```
 
@@ -218,7 +225,7 @@ default branch, whose cache every PR can read.
 | `time-floor` | `1us` | Absolute time change also required |
 | `memory-floor` | `0` | Absolute byte change also required |
 | `nruns` | `1` | Interleaved runs; all must agree |
-| `verbose` | `true` | Log each benchmark as it runs (shown if the run fails) |
+| `verbose` | `true` | Stream each benchmark's progress to the job log as it runs |
 | `fail-on-regression` | `false` | Fail the job on a regression |
 | `release-baseline` | `true` | On a version bump, compare against the last release tag |
 | `history` | — | Path to the noise-history file |

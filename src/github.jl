@@ -56,7 +56,7 @@ end
 
 # --- deserialization (trusted side): validate shape, coerce numbers -----------
 
-const _VERDICTS = (:regression, :improvement, :invariant, :added, :removed, :uncompared)
+const _VERDICTS = (:regression, :improvement, :invariant, :tradeoff, :added, :removed, :uncompared)
 const _REASONS = (:time, :memory, :both, :none)
 
 _num_or(x, default) = (x isa Real && isfinite(x)) ? Float64(x) : default

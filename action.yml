@@ -45,8 +45,8 @@ inputs:
     default: "1"
   verbose:
     description: >-
-      Log each benchmark as it runs in the benchmark subprocess. The log is only
-      shown when a run fails, where it identifies the benchmark that broke or hung.
+      Name each benchmark as it runs, streamed to the job log while the suite
+      executes, so progress is visible instead of the step going quiet for minutes.
     default: "true"
   fail-on-regression:
     description: "Exit non-zero (fail the job) when a regression is confirmed."

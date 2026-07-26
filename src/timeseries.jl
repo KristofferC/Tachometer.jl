@@ -31,7 +31,7 @@ function _fingerprint(script_hash; threads)
 end
 
 """
-    record_run(repo; script, env, threads, retune, verbose) -> Dict
+    record_run(repo; script, env, threads, retune, verbose, stream, io) -> Dict
 
 Run the suite once for the current commit of `repo` and return a record (commit
 metadata + per-benchmark minimum time/memory/allocs). Only finite values are
@@ -44,11 +44,13 @@ function record_run(
         threads::Int = 1,
         retune::Bool = false,
         verbose::Bool = true,
+        stream::Bool = verbose,
+        io::IO = stdout,
     )
     repo = abspath(repo)
     # Benchmark the committed HEAD (checked out into a worktree), not the live
     # working tree, so uncommitted changes can never be attributed to the commit.
-    rr = run_revision(repo, "HEAD", script; env, threads, retune, verbose)
+    rr = run_revision(repo, "HEAD", script; env, threads, retune, verbose, stream, io)
     rr.ok || error("benchmark run failed:\n" * rr.log)
 
     benches = Dict{String, Any}()

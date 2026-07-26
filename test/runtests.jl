@@ -5,8 +5,8 @@ using Dates
 using Tachometer: Estimate, Measurement, Meta, Report, RevisionRun, NoiseModel,
     _judge, _classify_time, _classify_memory, _combine, _as_ns, build_noise_from_history,
     effective_time_tolerance, prettytime, prettymemory, _signed_pct,
-    regressions, improvements, invariants, added, removed, suppressed,
-    project_version, last_release_tag, _release_baseline, WORKINGTREE, _write_driver,
+    regressions, improvements, invariants, tradeoffs, added, removed, suppressed, compared,
+    project_version, last_release_tag, _release_baseline, WORKINGTREE, _write_driver, _run_julia,
     load_index, load_shard, load_all_records, _releases, _shard_name, write_dashboard,
     report_to_dict, report_from_dict
 
@@ -90,6 +90,37 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         @test only(memjudge(1000, 1030; tol = 0.01)).verdict === :regression
     end
 
+    @testset "faster but hungrier is a trade-off" begin
+        # Time improved, memory regressed: a trade-off for a human to weigh, not a
+        # regression, and it does not turn the report red.
+        ms = judge(mkrun("g/a" => (14_000, 1000)), mkrun("g/a" => (10_000, 2000)))
+        @test only(ms).verdict === :tradeoff
+        @test only(ms).reason === :memory
+        r = Report(:ok, ms, meta(), "")
+        @test isempty(regressions(r)) && length(tradeoffs(r)) == 1
+        @test length(compared(r)) == 1          # still a compared benchmark
+        out = render(r)
+        @test occursin("🟡", out)
+        @test occursin("no performance regressions detected", out)
+        @test occursin("memory trade-off", out)
+
+        # The reverse — slower but leaner — stays a regression: a byte saved does
+        # not buy the right to be slower.
+        ms = judge(mkrun("g/a" => (10_000, 2000)), mkrun("g/a" => (14_000, 1000)))
+        @test only(ms).verdict === :regression && only(ms).reason === :time
+
+        # Memory alone regressing (time flat) is still a regression, as before.
+        ms = judge(mkrun("g/a" => (10_000, 1000)), mkrun("g/a" => (10_000, 2000)))
+        @test only(ms).verdict === :regression && only(ms).reason === :memory
+
+        # Faster *and* leaner is an unambiguous improvement, not a trade-off.
+        ms = judge(mkrun("g/a" => (14_000, 2000)), mkrun("g/a" => (10_000, 1000)))
+        @test only(ms).verdict === :improvement
+
+        # A trade-off never gates: `compare`'s status logic keys off regressions.
+        @test Report(:ok, ms, meta(), "").status === :ok
+    end
+
     @testset "benchmark driver" begin
         # `verbose` reaches the subprocess's `run(suite; verbose = ...)` call, so a
         # failing run's log names the benchmark it died on.
@@ -102,6 +133,35 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
             @test occursin("const _VERBOSE = $(v)", code)
             @test occursin("run(suite; verbose = _VERBOSE)", code)
             rm(path; force = true)
+        end
+    end
+
+    @testset "streamed subprocess output" begin
+        drv = tempname() * ".jl"
+        write(drv, """
+        println("first")
+        println(stderr, "on stderr")
+        println("last")
+        exit(3)
+        """)
+        try
+            # Streamed to `io` line by line, prefixed with the revision tag...
+            sink = IOBuffer()
+            r = _run_julia(drv, copy(ENV); stream = true, io = sink, prefix = "[abc1234] ")
+            streamed = String(take!(sink))
+            @test occursin("[abc1234] first", streamed)
+            @test occursin("[abc1234] last", streamed)
+            # ...and still captured, stderr included, with the exit status intact.
+            @test occursin("first", r.log) && occursin("on stderr", r.log)
+            @test r.code.exitcode == 3
+
+            # Off: nothing on `io`, but the log is unaffected.
+            quiet = IOBuffer()
+            r2 = _run_julia(drv, copy(ENV); stream = false, io = quiet)
+            @test isempty(String(take!(quiet)))
+            @test occursin("first", r2.log) && occursin("last", r2.log)
+        finally
+            rm(drv; force = true)
         end
     end
 
@@ -228,6 +288,40 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         out = render(Report(:regressed, ms, meta(), ""))
         @test !occursin("<!-- tachometer:x -->", replace(out, "<!-- tachometer:tachometer -->" => ""))
         @test !occursin("a|b", out)   # raw pipe would break the table
+    end
+
+    @testset "footer revisions" begin
+        foot(; kw...) = render(Report(:ok, Measurement[], Meta(; package = "P", timestamp = "now", kw...), ""))
+
+        # A ref that is just the commit written out adds nothing next to the SHA.
+        out = foot(baseline_sha = "389ecb7bd0", baseline_ref = "389ecb7bd0",
+            target_sha = "7f5fcb3aa1", target_ref = "7f5fcb3")
+        @test occursin("baseline `389ecb7` · target `7f5fcb3` ·", out)
+        @test !occursin("(389ecb7", out) && !occursin("(7f5fcb3", out)
+
+        # A name the SHA does not carry is still shown, and still sanitised.
+        out = foot(baseline_sha = "389ecb7bd0", baseline_ref = "master",
+            target_sha = "7f5fcb3aa1", target_ref = "v1.2.0")
+        @test occursin("baseline `389ecb7` (master)", out)
+        @test occursin("target `7f5fcb3` (v1.2.0)", out)
+        @test occursin("target `7f5fcb3` (working tree)",
+            foot(target_sha = "7f5fcb3aa1", target_ref = "working tree"))
+        @test !occursin("<!-- x -->",
+            foot(baseline_sha = "389ecb7bd0", baseline_ref = "ma<!-- x -->ster"))
+
+        # A dirty working tree keeps its ref: the SHA is not the whole story.
+        @test occursin("target `7f5fcb3` (working tree)",
+            foot(target_sha = "7f5fcb3aa1+dirty", target_ref = "working tree"))
+        # ...but a `+dirty` target whose ref is the same commit still drops it.
+        @test !occursin("(7f5fcb3",
+            foot(target_sha = "7f5fcb3aa1+dirty", target_ref = "7f5fcb3aa1"))
+
+        # No SHA at all (nothing was run): the ref alone, no empty backticks in the
+        # footer or in the subtitle's `sha → sha` span.
+        out = foot(baseline_ref = "master", target_ref = "working tree")
+        @test occursin("baseline `master` · target `working tree` ·", out)
+        @test !occursin("``", out)
+        @test !occursin("→", out)   # nothing ran, so no arrow between revisions
     end
 
     @testset "release baseline" begin
