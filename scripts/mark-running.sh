@@ -51,22 +51,34 @@ fi
 body="$(printf '%s' "$comments" | jq -rs --argjson id "$existing" '
     [ .[][] ] | map(select(.id == $id)) | .[0].body')"
 
-case "$body" in
-  *"$banner_id"*) echo "comment ${existing} already marked as re-running"; exit 0;;
-esac
-
 short="${sha:0:7}"
 if [ -n "$run_url" ]; then link="[the run in progress](${run_url})"; else link="the run in progress"; fi
-# Trailing newline so the splice leaves a blank line before the report heading.
 banner="${banner_id}
 > [!NOTE]
 > ⏳ **Benchmarks are re-running for \`${short}\`.** The results below are from an
-> earlier commit — check ${link} before reading them as current.
-"
+> earlier commit — check ${link} before reading them as current."
 
-# Splice the banner in after the marker line; join back with the original body.
-payload="$(jq -n --arg body "$body" --arg banner "$banner" '
-    {body: (($body | split("\n")) as $l | ([$l[0], $banner] + $l[1:]) | join("\n"))}')"
+# Any banner already there is REPLACED, not skipped: a second push before the
+# first run finishes must not leave the note naming the earlier commit and
+# linking its superseded run. Removing it means dropping the id line, the
+# quote lines that follow it, and the one blank line after them — then the new
+# banner goes back in after the hidden marker on line 1.
+new_body="$(jq -rn --arg body "$body" --arg id "$banner_id" --arg banner "$banner" '
+    ($body | split("\n")) as $l
+    | ([ $l | to_entries[] | select(.value == $id) | .key ] | first) as $i
+    | (if $i == null then $l
+       else $l[0:$i] + (
+              $l[$i+1:]
+              | until(length == 0 or (.[0] | startswith(">") | not); .[1:])
+              | if length > 0 and .[0] == "" then .[1:] else . end)
+       end) as $clean
+    | ([$clean[0], $banner, ""] + $clean[1:]) | join("\n")')"
 
-printf '%s' "$payload" | gh api --method PATCH "repos/${repo}/issues/comments/${existing}" --input - >/dev/null
+if [ "$new_body" = "$body" ]; then
+  echo "comment ${existing} already marked for ${short}; nothing to do"
+  exit 0
+fi
+
+jq -n --arg body "$new_body" '{body: $body}' \
+  | gh api --method PATCH "repos/${repo}/issues/comments/${existing}" --input - >/dev/null
 echo "marked comment ${existing} as re-running for ${short}"
