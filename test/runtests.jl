@@ -309,12 +309,17 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         @test !occursin("<!-- x -->",
             foot(baseline_sha = "389ecb7bd0", baseline_ref = "ma<!-- x -->ster"))
 
-        # A dirty working tree keeps its ref: the SHA is not the whole story.
-        @test occursin("target `7f5fcb3` (working tree)",
-            foot(target_sha = "7f5fcb3aa1+dirty", target_ref = "working tree"))
-        # ...but a `+dirty` target whose ref is the same commit still drops it.
-        @test !occursin("(7f5fcb3",
-            foot(target_sha = "7f5fcb3aa1+dirty", target_ref = "7f5fcb3aa1"))
+        # Uncommitted changes are the one thing that makes a run unreproducible, so
+        # the marker survives abbreviation — in the subtitle and in the footer.
+        out = foot(baseline_sha = "389ecb7bd0", baseline_ref = "master",
+            target_sha = "7f5fcb3aa1+dirty", target_ref = "working tree")
+        @test occursin("`389ecb7` → `7f5fcb3+dirty`", out)          # subtitle
+        @test occursin("target `7f5fcb3+dirty` (working tree)", out) # footer
+        # A `+dirty` target whose ref is the same commit still drops the ref, but
+        # keeps the marker.
+        out = foot(target_sha = "7f5fcb3aa1+dirty", target_ref = "7f5fcb3aa1")
+        @test occursin("target `7f5fcb3+dirty` ·", out)
+        @test !occursin("(7f5fcb3", out)
 
         # No SHA at all (nothing was run): the ref alone, no empty backticks in the
         # footer or in the subtitle's `sha → sha` span.

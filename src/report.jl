@@ -196,7 +196,15 @@ end
 # The SHA when there is one, else whatever name we have for the revision.
 _sha_or_ref(sha, ref) = isempty(sha) ?
     (isempty(strip(ref)) ? "unknown" : "`$(_safetext(strip(ref)))`") :
-    "`$(_safetext(_short(sha)))`"
+    "`$(_safetext(_short_sha(sha)))`"
+
+# Abbreviate the SHA but keep the "+dirty" marker a working-tree target carries:
+# plain `_short` would cut it off, hiding that the measured source had
+# uncommitted changes — the one thing that makes the run unreproducible.
+function _short_sha(sha::AbstractString)
+    parts = split(sha, '+'; limit = 2)
+    return length(parts) == 2 ? _short(parts[1]) * "+" * parts[2] : _short(sha)
+end
 
 # Whether `ref` is just the commit written out: a hex string that is a prefix of
 # the SHA, or of which the SHA is a prefix (either side may be abbreviated).
