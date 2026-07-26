@@ -139,7 +139,17 @@ report = compare("path/to/Pkg";
 ## Use on CI
 
 Tachometer is a composite GitHub Action. Ready-to-copy workflows are in
-[`examples/`](examples).
+[`examples/`](examples). There are four files there but you install **two or
+three** of them, because the PR workflows are alternatives: pick one PR setup,
+then add [`track.yml`](examples/track.yml) if you also want the history dashboard.
+
+| | PR comments | + history |
+|---|---|---|
+| Fork PRs supported | `benchmark.yml` + `report.yml` | `+ track.yml` |
+| Same-repo PRs only | `simple.yml` | `+ track.yml` |
+
+The fork-safe setup needs two files rather than one because the token boundary is
+per-workflow-event, not per-job; see below.
 
 The action itself only measures and uploads the report as an artifact; it does
 not post the comment. That split is deliberate: a `pull_request` job runs the PR's
