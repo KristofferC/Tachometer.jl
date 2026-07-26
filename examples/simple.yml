@@ -2,6 +2,10 @@
 # repository (not forks) — e.g. a maintainer-only workflow. It benchmarks and
 # comments in one job.
 #
+# This is an ALTERNATIVE to benchmark.yml + report.yml — install one setup or the
+# other, never both (they also share a concurrency group, so they would cancel
+# each other).
+#
 # WARNING: do NOT switch this to `pull_request_target` to make it work for forks.
 # That would run untrusted PR code with a write token. For fork support use the
 # split benchmark.yml + report.yml instead.
@@ -10,13 +14,22 @@ name: Benchmarks (simple)
 on:
   pull_request:
     branches: [master, main]
+    # A docs-only PR can't move the numbers, so don't spend a benchmark budget on
+    # it. NOTE: a skipped workflow never reports a status, so if you make the
+    # benchmark a required check, drop this filter (or add a no-op fallback job).
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+    # Draft PRs are benchmarked too (the default `types`), deliberately: perf
+    # feedback is most useful while the work is still in progress.
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: tachometer-${{ github.event.pull_request.number }}
+  group: tachometer-simple-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -42,14 +55,28 @@ jobs:
           fi
         continue-on-error: true
 
-      # Fetch the comment.sh helper from the action repo. This job holds
-      # `pull-requests: write`, so pin `ref` to an immutable commit SHA, not a
-      # mutable tag like v1.
+      # Fetch the comment.sh / mark-running.sh helpers from the action repo. This
+      # job holds `pull-requests: write`, so pin `ref` to an immutable commit SHA,
+      # not a mutable tag like v1.
       - uses: actions/checkout@v4
         with:
           repository: KristofferC/Tachometer.jl
           ref: 0000000000000000000000000000000000000000   # <-- replace with a pinned commit SHA
           path: .tachometer-action
+
+      # On a re-push the comment still shows the previous commit's numbers, and
+      # the benchmark below takes a while. Flag it before starting so nobody reads
+      # it as current. No-ops on the first run (no comment yet).
+      - name: Flag previous results as re-running
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash .tachometer-action/scripts/mark-running.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            "tachometer" \
+            "${{ github.event.pull_request.head.sha }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - id: bench
         uses: KristofferC/Tachometer.jl@v1   # pin to a SHA in production

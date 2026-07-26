@@ -4,11 +4,22 @@
 # fork PRs — safe, because this is the job that executes the PR's (untrusted)
 # benchmark code. It only measures and uploads an artifact. The trusted
 # reporter (report.yml) picks that artifact up and posts the comment.
+#
+# Use this together with report.yml, INSTEAD of simple.yml — not alongside it.
 name: Benchmarks
 
 on:
   pull_request:
     branches: [master, main]
+    # A docs-only PR can't move the numbers, so don't spend a benchmark budget on
+    # it. NOTE: a skipped workflow never reports a status, so if you make the
+    # benchmark a required check, drop this filter (or add a no-op fallback job).
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+    # Draft PRs are benchmarked too (the default `types`), deliberately: perf
+    # feedback is most useful while the work is still in progress.
 
 permissions:
   contents: read
