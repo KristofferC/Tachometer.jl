@@ -18,9 +18,8 @@ on:
       - '**/*.md'
       - 'docs/**'
       - 'LICENSE'
-    # Optional: uncomment to hold off until a PR is marked ready for review. This
-    # trades away perf feedback while a PR is still a draft.
-    # types: [opened, synchronize, reopened, ready_for_review]
+    # Draft PRs are benchmarked too (the default `types`), deliberately: perf
+    # feedback is most useful while the work is still in progress.
 
 permissions:
   contents: read

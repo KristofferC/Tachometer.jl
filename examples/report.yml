@@ -10,18 +10,61 @@ name: Benchmark report
 on:
   workflow_run:
     workflows: [Benchmarks]
-    types: [completed]
+    # `requested` fires when a benchmark run starts, which is what lets the
+    # `mark` job below flag the previous results as superseded; `completed` is
+    # what posts the new ones.
+    types: [requested, completed]
 
 permissions:
   pull-requests: write
   actions: read
   contents: read
 
-concurrency:
-  group: tachometer-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: false
-
 jobs:
+  # A new push means the comment on the PR is now showing results for an older
+  # commit, and a full run takes a while. Flag it as stale up front so nobody
+  # reads it as current. Deliberately cheap: no Julia, just gh + jq.
+  mark:
+    name: Mark previous results stale
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.action == 'requested' &&
+      github.event.workflow_run.event == 'pull_request'
+    concurrency:
+      # Separate from the report group so a queued banner never waits behind a
+      # report run; a newer push supersedes an older banner.
+      group: tachometer-mark-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: true
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      # This job also holds `pull-requests: write`, so pin `ref` to a full SHA.
+      - uses: actions/checkout@v4
+        with:
+          repository: KristofferC/Tachometer.jl
+          ref: 0000000000000000000000000000000000000000   # <-- replace with a pinned commit SHA
+          path: .tachometer-action
+
+      - name: Flag the sticky comment as re-running
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+                | jq -r --arg b "$HEAD_BRANCH" --arg r "$HEAD_REPO" \
+                  '[.[] | select(.state=="open" and .head.ref==$b and .head.repo.full_name==$r)][0].number // empty')"
+          if [ -z "$pr" ]; then
+            echo "no matching open PR for ${HEAD_SHA}; nothing to mark"
+            exit 0
+          fi
+          # No-ops when there is no comment yet. Use the same markers as the
+          # benchmark job; add a line per marker if you run a matrix.
+          bash .tachometer-action/scripts/mark-running.sh \
+            "$REPO" "$pr" "tachometer" "$HEAD_SHA" "$RUN_URL"
+
   report:
     name: Post report
     runs-on: ubuntu-latest
@@ -32,8 +75,12 @@ jobs:
     # its artifact with `if: always()`, so an errored benchmark still has a
     # report worth posting.
     if: >-
+      github.event.action == 'completed' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion != 'cancelled'
+    concurrency:
+      group: tachometer-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}

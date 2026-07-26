@@ -21,9 +21,8 @@ on:
       - '**/*.md'
       - 'docs/**'
       - 'LICENSE'
-    # Optional: uncomment to hold off until a PR is marked ready for review. This
-    # trades away perf feedback while a PR is still a draft.
-    # types: [opened, synchronize, reopened, ready_for_review]
+    # Draft PRs are benchmarked too (the default `types`), deliberately: perf
+    # feedback is most useful while the work is still in progress.
 
 permissions:
   contents: read
@@ -56,14 +55,28 @@ jobs:
           fi
         continue-on-error: true
 
-      # Fetch the comment.sh helper from the action repo. This job holds
-      # `pull-requests: write`, so pin `ref` to an immutable commit SHA, not a
-      # mutable tag like v1.
+      # Fetch the comment.sh / mark-running.sh helpers from the action repo. This
+      # job holds `pull-requests: write`, so pin `ref` to an immutable commit SHA,
+      # not a mutable tag like v1.
       - uses: actions/checkout@v4
         with:
           repository: KristofferC/Tachometer.jl
           ref: 0000000000000000000000000000000000000000   # <-- replace with a pinned commit SHA
           path: .tachometer-action
+
+      # On a re-push the comment still shows the previous commit's numbers, and
+      # the benchmark below takes a while. Flag it before starting so nobody reads
+      # it as current. No-ops on the first run (no comment yet).
+      - name: Flag previous results as re-running
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash .tachometer-action/scripts/mark-running.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            "tachometer" \
+            "${{ github.event.pull_request.head.sha }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - id: bench
         uses: KristofferC/Tachometer.jl@v1   # pin to a SHA in production

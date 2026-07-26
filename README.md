@@ -172,6 +172,22 @@ PR.
   `pull_request_target` to get around that — that runs untrusted code with a
   write token.
 
+Because the comment is sticky, a push leaves the previous commit's numbers on the
+PR for as long as the new run takes. Both setups mark that explicitly: the comment
+gets a
+
+> [!NOTE]
+> ⏳ **Benchmarks are re-running for `abc1234`.** The results below are from an
+> earlier commit — check the run in progress before reading them as current.
+
+banner as soon as the new run starts, and the completed report replaces the whole
+body, banner included. The fork-safe setup does this from the trusted side, on the
+`workflow_run: requested` event, so it still never needs a write token in the
+untrusted job. It only ever annotates an existing comment — the first run on a PR
+posts nothing until it has results. If you run a benchmark matrix with several
+`marker` values, call
+[`mark-running.sh`](scripts/mark-running.sh) once per marker.
+
 ```yaml
 - uses: KristofferC/Tachometer.jl@<commit-sha>
   with:
