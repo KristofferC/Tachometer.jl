@@ -37,7 +37,9 @@ jobs:
     name: Benchmark
     # Same-repo PRs only (fork PRs can't get a write token here anyway).
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    # Much less noisy than x64/macOS runners, but free for public repos only.
+    # Must match track.yml's runner. See "Choosing a runner" in the README.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +83,7 @@ jobs:
       - id: bench
         uses: KristofferC/Tachometer.jl@v1   # pin to a SHA in production
         with:
-          nruns: "2"
+          nruns: "3"
           noise-history: ${{ runner.temp }}/tacho-history/benchmarks/data
 
       - name: Post sticky comment
