@@ -327,6 +327,63 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         @test occursin("baseline `master` · target `working tree` ·", out)
         @test !occursin("``", out)
         @test !occursin("→", out)   # nothing ran, so no arrow between revisions
+
+        # A GitHub run URL names the repository, so the SHAs link to their
+        # commits — GitHub autolinks bare full SHAs but never code spans, so the
+        # link has to be explicit. A dirty working tree links to the commit it
+        # sits on, keeping the marker in the visible text.
+        out = foot(baseline_sha = "389ecb7bd0", baseline_ref = "master",
+            target_sha = "7f5fcb3aa1+dirty", target_ref = "working tree",
+            run_url = "https://github.com/K/P.jl/actions/runs/123")
+        @test occursin("baseline [`389ecb7`](https://github.com/K/P.jl/commit/389ecb7bd0) (master)", out)
+        @test occursin("target [`7f5fcb3+dirty`](https://github.com/K/P.jl/commit/7f5fcb3aa1) (working tree)", out)
+        @test occursin("[`389ecb7`](https://github.com/K/P.jl/commit/389ecb7bd0) → [`7f5fcb3+dirty`]", out) # subtitle
+
+        # No link without a repository to point at: a non-GitHub run URL, or a
+        # SHA that isn't hex.
+        out = foot(target_sha = "7f5fcb3aa1", run_url = "https://example.com/run/1")
+        @test occursin("target `7f5fcb3` ·", out) && !occursin("[`7f5fcb3`]", out)
+        out = foot(target_sha = "not-a-sha!",
+            run_url = "https://github.com/K/P.jl/actions/runs/123")
+        @test !occursin("](https://github.com/K/P.jl/commit/", out)
+
+        # The CPU the numbers came from sits next to the Julia version; unknown
+        # (empty) leaves no gap in the separator chain.
+        @test occursin("Julia 1.11.0 · Apple M2 · min estimator",
+            foot(julia_version = "1.11.0", cpu = "Apple M2"))
+        @test occursin("Julia 1.11.0 · min estimator", foot(julia_version = "1.11.0", cpu = ""))
+
+        # Vendor boilerplate is trimmed from the detected model.
+        @test Tachometer._cpu_model("Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz") ==
+            "Intel Xeon Platinum 8370C"
+        @test Tachometer._cpu_model("AMD EPYC 7763 64-Core Processor") == "AMD EPYC 7763"
+        @test Tachometer._cpu_model("Apple M2") == "Apple M2"
+    end
+
+    @testset "changes table capping" begin
+        E(t) = Estimate(float(t), 0.0, 0.0)
+        key(i) = "g/b$(lpad(i, 3, '0'))"
+        mk(i) = Measurement(key(i), E(10_000), E(14_000), 1.4, 1.0, :regression, :time, 1, 1, 0.05, false)
+        r = Report(:regressed, [mk(i) for i in 1:30], meta(), "")
+
+        # Nothing is cut by default: every changed benchmark is in the top table.
+        full = render(r)
+        @test all(i -> occursin("`$(key(i))`", split(full, "<details>")[1]), 1:30)
+        @test !occursin("… and", full)
+
+        # Over the size limit: the collapsed sections go first, the table stays full.
+        out = render(r; byte_limit = sizeof(full) - 1)
+        @test occursin("Full results omitted", out) && !occursin("<details>", out)
+        @test all(i -> occursin("`$(key(i))`", out), 1:30)
+        @test !occursin("… and", out)
+
+        # Still over: the changes table itself is capped as a last resort, and its
+        # overflow note points at the run artifact instead of the dropped full
+        # results.
+        out = render(r; max_rows = 8, byte_limit = 300)
+        @test occursin("… and 22 more changes in the run artifact.", out)
+        @test occursin("Full results omitted", out)
+        @test occursin("`$(key(8))`", out) && !occursin("`$(key(9))`", out)
     end
 
     @testset "release baseline" begin
@@ -435,6 +492,7 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         d = report_to_dict(r)
         d["meta"]["marker"] = "x --></summary>## Fake ping @everyone [click](https://evil)<!--"
         d["meta"]["julia_version"] = "1.11 <a href=\"https://evil\">x</a>"
+        d["meta"]["cpu"] = "CPU [l](https://evil) @cpuguy"
         d["meta"]["note"] = "ping @maintainer <!-- tachometer:evil --> `x`|y [l](https://evil) <img src=\"https://track\"> <https://auto.evil>"
         d["meta"]["baseline_ref"] = "[r](https://evil)"
         d["meta"]["run_url"] = "javascript:alert(1)"
