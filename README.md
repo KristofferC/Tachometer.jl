@@ -203,7 +203,7 @@ posts nothing until it has results. If you run a benchmark matrix with several
 ```yaml
 - uses: KristofferC/Tachometer.jl@<commit-sha>
   with:
-    nruns: "2"
+    nruns: "3"
     time-tolerance: "0.05"
     time-floor: "1us"
     history: .tachometer/history.json
@@ -212,6 +212,23 @@ posts nothing until it has results. If you run a benchmark matrix with several
 The `actions/cache` for the history file is scoped to the PR by GitHub, so
 cross-PR learning is limited unless you also run the workflow on `push` to the
 default branch, whose cache every PR can read.
+
+## Choosing a runner
+
+The examples use `ubuntu-24.04-arm`: in a null experiment (identical code
+benchmarked against itself) it had roughly half the run-to-run noise of
+`ubuntu-latest` and a quarter of `macos-latest`, whose spread was wide enough
+that only very large regressions could be caught without false positives.
+
+Two caveats: arm runners are free for **public repos only**, and **it's
+aarch64** — a regression confined to x86-specific code paths won't show. If
+either forces you onto `ubuntu-latest`, expect to loosen `time-tolerance` and
+lean harder on `nruns` and the noise history.
+
+Use the **same runner** for the PR workflow and `track.yml`: the noise model
+only learns from history in the same OS/arch/Julia regime, so switching runners
+resets it — expect the flat default tolerance until a few default-branch
+commits have been tracked on the new runner.
 
 ## Options
 

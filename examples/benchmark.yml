@@ -31,7 +31,9 @@ concurrency:
 jobs:
   benchmark:
     name: Benchmark
-    runs-on: ubuntu-latest
+    # Much less noisy than x64/macOS runners, but free for public repos only.
+    # Must match track.yml's runner. See "Choosing a runner" in the README.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +58,7 @@ jobs:
         with:
           julia-version: "1"
           script: benchmark/benchmarks.jl
-          nruns: "2"
+          nruns: "3"
           time-tolerance: "0.05"
           time-floor: "1us"
           noise-history: ${{ runner.temp }}/tacho-history/benchmarks/data

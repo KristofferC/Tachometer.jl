@@ -28,7 +28,9 @@ jobs:
     name: Record
     # Tag pushes only refresh the release markers; there is nothing to benchmark.
     if: github.ref_type != 'tag'
-    runs-on: ubuntu-latest
+    # Must match the PR benchmark workflow's runner: the history recorded here
+    # trains its noise model, which ignores records from a different regime.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     concurrency:
       group: tachometer-record-${{ github.sha }}
@@ -105,6 +107,7 @@ jobs:
         github.ref_type == 'tag' ||
         (needs.record.result == 'success' && needs.record.outputs.benchmarked == 'true')
       )
+    # No benchmarks run here, so this doesn't need to match the `record` runner.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
