@@ -358,6 +358,29 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
             "Intel Xeon Platinum 8370C"
         @test Tachometer._cpu_model("AMD EPYC 7763 64-Core Processor") == "AMD EPYC 7763"
         @test Tachometer._cpu_model("Apple M2") == "Apple M2"
+
+        # On aarch64 Linux Sys.cpu_info() reports "unknown" (no "model name" line in
+        # /proc/cpuinfo); the ARM CPUID implementer/part fields are decoded instead.
+        cobalt = """
+        processor\t: 0
+        BogoMIPS\t: 50.00
+        CPU implementer\t: 0x41
+        CPU architecture: 8
+        CPU variant\t: 0x0
+        CPU part\t: 0xd49
+        CPU revision\t: 1
+        """
+        @test Tachometer._proc_cpuinfo_model(cobalt) == "ARM Neoverse-N2"
+        # A "model name" line wins when present (x86, and some arm kernels).
+        @test Tachometer._proc_cpuinfo_model("model name\t: Neoverse-N1\n" * cobalt) == "Neoverse-N1"
+        # Unmapped ids stay identifiable instead of pretending to know the name.
+        @test Tachometer._proc_cpuinfo_model(replace(cobalt, "0xd49" => "0x123")) == "ARM part 0x123"
+        @test Tachometer._proc_cpuinfo_model(replace(cobalt, "0x41" => "0x99")) ==
+            "implementer 0x99 part 0xd49"
+        # No usable fields at all -> empty, which the footer omits.
+        @test Tachometer._proc_cpuinfo_model("flags\t: fp asimd\n") == ""
+        # _raw_cpu_model never *returns* "unknown": either a real model or empty.
+        @test Tachometer._raw_cpu_model() != "unknown"
     end
 
     @testset "changes table capping" begin
