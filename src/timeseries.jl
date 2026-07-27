@@ -15,17 +15,12 @@ _now_iso() = Dates.format(Dates.now(Dates.UTC), "yyyy-mm-ddTHH:MM:SS\\Z")
 # directly comparable (different CPU/OS/Julia can shift timings), so it is stored
 # with every record and shown in the dashboard.
 function _fingerprint(script_hash; threads)
-    cpu = try
-        first(Sys.cpu_info()).model
-    catch
-        ""
-    end
     return Dict(
         "os" => string(Sys.KERNEL),
         "arch" => string(Sys.ARCH),
         "julia" => string(VERSION),
         "threads" => threads,
-        "cpu" => cpu,
+        "cpu" => _raw_cpu_model(),
         "suite" => script_hash,
     )
 end

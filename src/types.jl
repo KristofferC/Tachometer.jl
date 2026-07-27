@@ -49,10 +49,47 @@ struct Measurement
     suppressed::Bool        # would regress at the global tolerance, but sits inside the learned noise band
 end
 
-# The CPU the benchmarks ran on, with vendor boilerplate trimmed so it fits the
-# footer: "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz" -> "Intel Xeon Platinum
-# 8370C", "AMD EPYC 7763 64-Core Processor" -> "AMD EPYC 7763".
-_cpu_model() = _cpu_model(try Sys.cpu_info()[1].model catch; "" end)
+# The CPU the benchmarks ran on. On aarch64 Linux (e.g. the GitHub ubuntu-*-arm
+# runners) /proc/cpuinfo has no "model name" line, so libuv — and therefore
+# Sys.cpu_info() — reports the model as "unknown"; decode the ARM CPUID
+# "CPU implementer"/"CPU part" fields instead (Cobalt 100 -> "ARM Neoverse-N2").
+function _raw_cpu_model()
+    model = strip(try Sys.cpu_info()[1].model catch; "" end)
+    if (isempty(model) || lowercase(model) == "unknown") && Sys.islinux()
+        model = try _proc_cpuinfo_model(read("/proc/cpuinfo", String)) catch; "" end
+    end
+    return lowercase(model) == "unknown" ? "" : String(model)
+end
+
+const _ARM_IMPLEMENTERS = Dict(0x41 => "ARM", 0x51 => "Qualcomm", 0x61 => "Apple", 0xc0 => "Ampere")
+const _ARM_PARTS = Dict(   # (implementer, part) for cores seen on CI/cloud arm runners
+    (0x41, 0xd0c) => "Neoverse-N1",
+    (0x41, 0xd40) => "Neoverse-V1",
+    (0x41, 0xd49) => "Neoverse-N2",
+    (0x41, 0xd4f) => "Neoverse-V2",
+    (0xc0, 0xac3) => "AmpereOne",
+)
+
+function _cpuinfo_field(cpuinfo::AbstractString, field::AbstractString)
+    m = match(Regex("^" * field * "\\s*:\\s*(.+)", "m"), cpuinfo)
+    return m === nothing ? "" : strip(m.captures[1])
+end
+
+function _proc_cpuinfo_model(cpuinfo::AbstractString)
+    model = _cpuinfo_field(cpuinfo, "model name")
+    isempty(model) || return String(model)
+    imp, part = _cpuinfo_field(cpuinfo, "CPU implementer"), _cpuinfo_field(cpuinfo, "CPU part")
+    impn, partn = tryparse(Int, imp), tryparse(Int, part)
+    (impn === nothing || partn === nothing) && return ""
+    vendor = get(_ARM_IMPLEMENTERS, impn, "implementer " * imp)
+    core = get(_ARM_PARTS, (impn, partn), "part " * part)
+    return vendor * " " * core
+end
+
+# Vendor boilerplate trimmed so the model fits the footer: "Intel(R) Xeon(R)
+# Platinum 8370C CPU @ 2.80GHz" -> "Intel Xeon Platinum 8370C", "AMD EPYC 7763
+# 64-Core Processor" -> "AMD EPYC 7763".
+_cpu_model() = _cpu_model(_raw_cpu_model())
 function _cpu_model(model::AbstractString)
     model = replace(model, r"\((?:R|TM)\)"i => "")
     model = replace(model, r" CPU\b" => "", r" @ [0-9.]+ ?[GM]Hz" => "", r" \d+-Core Processor\b" => "")
