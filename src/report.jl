@@ -14,19 +14,22 @@ const MARKER_PREFIX = "tachometer"
 
 Render a [`Report`](@ref) to a markdown string suitable for a PR comment. The
 first line is a hidden marker used to keep the comment sticky (updated in place).
-If the body would exceed `byte_limit` bytes, the collapsed full-results table is
-dropped in favour of a pointer to the run.
+Every change is shown when it fits; only if the body would exceed `byte_limit`
+bytes are the collapsed sections dropped in favour of a pointer to the run —
+and the changes table capped at `max_rows` if even that isn't enough.
 """
 function render(r::Report; max_rows::Int = 8, byte_limit::Int = 60000)
-    io = IOBuffer()
-    println(io, "<!-- $(MARKER_PREFIX):$(_safemarker(r.meta.marker)) -->")
-    _header(io, r)
-    println(io)
-    _subtitle(io, r)
-
-    if r.status === :regressed || !isempty(improvements(r)) || !isempty(tradeoffs(r))
+    function base(cap, overflow_where)
+        io = IOBuffer()
+        println(io, "<!-- $(MARKER_PREFIX):$(_safemarker(r.meta.marker)) -->")
+        _header(io, r)
         println(io)
-        _changes_table(io, r, max_rows)
+        _subtitle(io, r)
+        if r.status === :regressed || !isempty(improvements(r)) || !isempty(tradeoffs(r))
+            println(io)
+            _changes_table(io, r, cap, overflow_where)
+        end
+        return String(take!(io))
     end
 
     body_extras = IOBuffer()
@@ -36,18 +39,22 @@ function render(r::Report; max_rows::Int = 8, byte_limit::Int = 60000)
     extras = String(take!(body_extras))
 
     footer = _footer(r)
-    base = String(take!(io))
+    full = base(typemax(Int), "")
 
     # Measure bytes (not characters): GitHub's comment limit is in bytes, and the
     # reporter rejects oversized bodies by byte count too.
-    if sizeof(base) + sizeof(extras) + sizeof(footer) > byte_limit
-        # Too long for a comment: keep the summary, point at the run for detail.
-        note = "\n<sub>Full results omitted (comment size limit) — see the " *
-            (let u = _safeurl(r.meta.run_url); isempty(u) ? "workflow run" : "[workflow run]($(u))" end) *
-            " artifact.</sub>\n"
-        return base * note * footer
-    end
-    return base * extras * footer
+    sizeof(full) + sizeof(extras) + sizeof(footer) <= byte_limit && return full * extras * footer
+
+    # Too long for a comment: drop the collapsed sections and point at the run
+    # for detail.
+    note = "\n<sub>Full results omitted (comment size limit) — see the " *
+        (let u = _safeurl(r.meta.run_url); isempty(u) ? "workflow run" : "[workflow run]($(u))" end) *
+        " artifact.</sub>\n"
+    sizeof(full) + sizeof(note) + sizeof(footer) <= byte_limit && return full * note * footer
+    # Still too long: the changes table itself is what's oversized — cap it. Its
+    # overflow note points at the run artifact, since the full results it would
+    # normally refer to are the very thing being dropped.
+    return base(max_rows, "in the run artifact") * note * footer
 end
 
 # --- pieces ----------------------------------------------------------------
@@ -90,7 +97,8 @@ function _subtitle(io, r::Report)
     # Nothing ran (no baseline, or the suite never started): skip the arrow rather
     # than printing a pair of empty backticks.
     if !isempty(m.baseline_sha) || !isempty(m.target_sha)
-        push!(parts, "$(_sha_or_ref(m.baseline_sha, m.baseline_ref)) → $(_sha_or_ref(m.target_sha, m.target_ref))")
+        repo = _repo_url(m.run_url)
+        push!(parts, "$(_sha_or_ref(m.baseline_sha, m.baseline_ref, repo)) → $(_sha_or_ref(m.target_sha, m.target_ref, repo))")
     end
     push!(parts, "Julia $(_safetext(m.julia_version))")
     push!(parts, "$(_pct0(m.time_tolerance)) tolerance")
@@ -111,8 +119,10 @@ function _subtitle(io, r::Report)
 end
 
 # Single table of everything that moved: regressions (worst first), then memory
-# trade-offs, then improvements. One icon per row.
-function _changes_table(io, r::Report, max_rows::Int)
+# trade-offs, then improvements. One icon per row. Only capped as a last resort
+# against the comment size limit, in which case `overflow_where` says where the
+# cut rows can still be found.
+function _changes_table(io, r::Report, max_rows::Int, overflow_where::String)
     regs = sort(regressions(r); by = m -> -_sortkey(m))   # biggest regression first
     trds = sort(tradeoffs(r); by = m -> -_sortkey(m))
     imps = sort(improvements(r); by = m -> -_sortkey(m))  # biggest improvement first
@@ -124,11 +134,8 @@ function _changes_table(io, r::Report, max_rows::Int)
     for m in shown
         println(io, "| $(_icon(m)) | `$(_safekey(m.key))` | $(_time_cell(m)) | $(_mem_cell(m)) |")
     end
-    if !isempty(trds)
-        println(io, "\n<sub>🟡 faster, but allocates more — a trade-off to weigh, not counted as a regression.</sub>")
-    end
     hidden = length(rows) - length(shown)
-    hidden > 0 && println(io, "\n<sub>… and $(hidden) more change$(_s(hidden)) in the full results below.</sub>")
+    hidden > 0 && println(io, "\n<sub>… and $(hidden) more change$(_s(hidden)) $(overflow_where).</sub>")
     return
 end
 
@@ -187,16 +194,29 @@ end
 # "baseline `389ecb7` (master)" — the ref in parentheses only earns its place when
 # it names something the SHA doesn't. The action resolves refs to SHAs before
 # calling, so the common case would otherwise read "`389ecb7` (389ecb7…)".
-function _revision_part(label, sha, ref)
-    part = "$(label) $(_sha_or_ref(sha, ref))"
+function _revision_part(label, sha, ref, repo = "")
+    part = "$(label) $(_sha_or_ref(sha, ref, repo))"
     (isempty(sha) || isempty(strip(ref)) || _same_commit(strip(ref), sha)) && return part
     return part * " ($(_safetext(strip(ref))))"
 end
 
-# The SHA when there is one, else whatever name we have for the revision.
-_sha_or_ref(sha, ref) = isempty(sha) ?
-    (isempty(strip(ref)) ? "unknown" : "`$(_safetext(strip(ref)))`") :
-    "`$(_safetext(_short_sha(sha)))`"
+# The SHA when there is one — linked to its commit when the repository is known —
+# else whatever name we have for the revision.
+function _sha_or_ref(sha, ref, repo = "")
+    isempty(sha) && return isempty(strip(ref)) ? "unknown" : "`$(_safetext(strip(ref)))`"
+    code = "`$(_safetext(_short_sha(sha)))`"
+    base = first(split(sha, '+'))   # a "+dirty" working tree still sits on this commit
+    (isempty(repo) || !occursin(r"^[0-9a-fA-F]{7,40}$", base)) && return code
+    return "[$(code)]($(repo)/commit/$(base))"
+end
+
+# The repository the comparison ran in, recovered from the workflow-run URL.
+# Only a URL that passed `_safeurl` is consulted, so the capture is safe to
+# embed as a link target.
+function _repo_url(run_url)
+    m = match(r"^(https://github\.com/[^/]+/[^/]+)/actions/", _safeurl(run_url))
+    return m === nothing ? "" : String(m.captures[1])
+end
 
 # Abbreviate the SHA but keep the "+dirty" marker a working-tree target carries:
 # plain `_short` would cut it off, hiding that the measured source had
@@ -220,9 +240,11 @@ function _footer(r::Report)
     m = r.meta
     io = IOBuffer()
     parts = String[]
-    push!(parts, _revision_part("baseline", m.baseline_sha, m.baseline_ref))
-    push!(parts, _revision_part("target", m.target_sha, m.target_ref))
+    repo = _repo_url(m.run_url)
+    push!(parts, _revision_part("baseline", m.baseline_sha, m.baseline_ref, repo))
+    push!(parts, _revision_part("target", m.target_sha, m.target_ref, repo))
     push!(parts, "Julia $(_safetext(m.julia_version))")
+    isempty(m.cpu) || push!(parts, _safetext(m.cpu))
     push!(parts, "min estimator")
     push!(parts, "tol $(_pct0(m.time_tolerance))/$(_pct0(m.memory_tolerance))")
     push!(parts, "floor $(prettytime(m.time_floor_ns))")

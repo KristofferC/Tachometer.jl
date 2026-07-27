@@ -49,6 +49,16 @@ struct Measurement
     suppressed::Bool        # would regress at the global tolerance, but sits inside the learned noise band
 end
 
+# The CPU the benchmarks ran on, with vendor boilerplate trimmed so it fits the
+# footer: "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz" -> "Intel Xeon Platinum
+# 8370C", "AMD EPYC 7763 64-Core Processor" -> "AMD EPYC 7763".
+_cpu_model() = _cpu_model(try Sys.cpu_info()[1].model catch; "" end)
+function _cpu_model(model::AbstractString)
+    model = replace(model, r"\((?:R|TM)\)"i => "")
+    model = replace(model, r" CPU\b" => "", r" @ [0-9.]+ ?[GM]Hz" => "", r" \d+-Core Processor\b" => "")
+    return strip(replace(model, r"\s+" => " "))
+end
+
 """
     Meta
 
@@ -62,6 +72,7 @@ struct Meta
     target_ref::String
     target_sha::String
     julia_version::String
+    cpu::String
     estimator::String
     time_tolerance::Float64
     memory_tolerance::Float64
@@ -82,6 +93,7 @@ function Meta(;
         target_ref::AbstractString = "",
         target_sha::AbstractString = "",
         julia_version::AbstractString = string(VERSION),
+        cpu::AbstractString = _cpu_model(),
         estimator::AbstractString = "minimum",
         time_tolerance::Real = 0.05,
         memory_tolerance::Real = 0.05,
@@ -96,7 +108,7 @@ function Meta(;
     )
     return Meta(
         package, baseline_ref, baseline_sha, target_ref, target_sha,
-        julia_version, estimator, Float64(time_tolerance), Float64(memory_tolerance),
+        julia_version, cpu, estimator, Float64(time_tolerance), Float64(memory_tolerance),
         Float64(time_floor_ns), Float64(memory_floor_bytes), Int(nruns),
         suite_changed, run_url, marker, timestamp, note,
     )

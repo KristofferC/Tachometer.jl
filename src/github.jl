@@ -36,7 +36,7 @@ function report_to_dict(r::Report)
         "status" => String(r.status), "message" => r.message,
         "meta" => Dict(
             "package" => m.package, "baseline_ref" => m.baseline_ref, "baseline_sha" => m.baseline_sha,
-            "target_ref" => m.target_ref, "target_sha" => m.target_sha, "julia_version" => m.julia_version,
+            "target_ref" => m.target_ref, "target_sha" => m.target_sha, "julia_version" => m.julia_version, "cpu" => m.cpu,
             "estimator" => m.estimator, "time_tolerance" => m.time_tolerance, "memory_tolerance" => m.memory_tolerance,
             "time_floor_ns" => m.time_floor_ns, "memory_floor_bytes" => m.memory_floor_bytes, "nruns" => m.nruns,
             "suite_changed" => m.suite_changed, "run_url" => m.run_url, "marker" => m.marker,
@@ -88,6 +88,9 @@ function report_from_dict(d)
         package = _str(get(md, "package", "")), baseline_ref = _str(get(md, "baseline_ref", "")),
         baseline_sha = _str(get(md, "baseline_sha", "")), target_ref = _str(get(md, "target_ref", "")),
         target_sha = _str(get(md, "target_sha", "")), julia_version = _str(get(md, "julia_version", "")),
+        # "" when absent, never this machine's CPU: the trusted reporter re-renders
+        # on a different runner than the one that produced the numbers.
+        cpu = _str(get(md, "cpu", "")),
         estimator = _str(get(md, "estimator", "minimum")),
         time_tolerance = _num_or(get(md, "time_tolerance", nothing), 0.05),
         memory_tolerance = _num_or(get(md, "memory_tolerance", nothing), 0.05),
@@ -128,7 +131,7 @@ function render_report_file(in_json, out_md; marker = nothing, run_url = nothing
         r = Report(r.status, r.measurements,
             Meta(; package = m.package, baseline_ref = m.baseline_ref, baseline_sha = m.baseline_sha,
                 target_ref = m.target_ref, target_sha = m.target_sha, julia_version = m.julia_version,
-                estimator = m.estimator, time_tolerance = m.time_tolerance, memory_tolerance = m.memory_tolerance,
+                cpu = m.cpu, estimator = m.estimator, time_tolerance = m.time_tolerance, memory_tolerance = m.memory_tolerance,
                 time_floor_ns = m.time_floor_ns, memory_floor_bytes = m.memory_floor_bytes, nruns = m.nruns,
                 suite_changed = m.suite_changed,
                 run_url = (run_url === nothing || isempty(run_url)) ? m.run_url : String(run_url),
