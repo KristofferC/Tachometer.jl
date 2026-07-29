@@ -214,6 +214,10 @@ pushes and publishes a static dashboard at:
 https://OWNER.github.io/REPOSITORY/benchmarks/
 ```
 
+**[Live example →](https://kristofferc.github.io/Tachometer.jl/)** — generated
+from synthetic data by [`scripts/generate-demo-data.jl`](scripts/generate-demo-data.jl),
+so regressions, releases, and environment changes all have something to show.
+
 To enable it:
 
 1. Copy `examples/track.yml` to `.github/workflows/`.
