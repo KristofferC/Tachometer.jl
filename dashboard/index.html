@@ -134,13 +134,29 @@
   .modal .plot { height: 62vh; }
 
   /* Compare */
-  .cmp-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
-  .cmp-bar label { color: var(--muted); font-size: 12px; }
-  .cmp-bar select { max-width: 340px; border: 1px solid var(--hairline); border-radius: 8px;
+  .cmp-head { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4px 18px;
+              align-items: center; padding: 14px 16px; margin-bottom: 14px; }
+  .cmp-side { min-width: 0; }
+  .cmp-side .role { color: var(--faint); font-size: 11px; text-transform: uppercase;
+                    letter-spacing: .08em; }
+  .cmp-side .id { font-size: 15px; margin: 3px 0 1px; }
+  .cmp-side .id .chip { margin-left: 8px; }
+  .cmp-side .cmsg { color: var(--muted); font-size: 12.5px; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; margin-bottom: 8px; }
+  .cmp-head select { width: 100%; border: 1px solid var(--hairline); border-radius: 8px;
     background: var(--card); color: var(--ink); font-size: 12.5px; padding: 6px 26px 6px 8px;
     font-family: ui-monospace, Menlo, Consolas, monospace; }
-  .cmp-bar .swap { border: 1px solid var(--hairline); background: var(--card); color: var(--muted);
-                   border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 13px; }
+  .cmp-head .swap { border: 1px solid var(--hairline); background: var(--card); color: var(--muted);
+                    border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 13px; }
+  @media (max-width: 640px){
+    .cmp-head { grid-template-columns: 1fr; }
+    .cmp-head .swap { justify-self: start; }
+  }
+  .cmp-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .cmp-ctl .lbl { color: var(--muted); font-size: 12px; }
+  .cmp-ctl .cat { border: 1px solid var(--hairline); background: none; color: var(--ink);
+                  font-size: 12px; border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+  .cmp-ctl .cat[aria-pressed=false] { color: var(--faint); opacity: .55; }
   .cmp-summary { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
                  padding: 12px 16px; margin-bottom: 14px; }
   .cmp-summary .big { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -158,7 +174,7 @@
   /* Commits timeline */
   .timeline { padding: 4px 0; }
   .commit { display: flex; gap: 12px; align-items: baseline; padding: 7px 16px;
-            border-bottom: 1px solid var(--grid); cursor: pointer; }
+            border-bottom: 1px solid var(--grid); }
   .commit:last-child { border-bottom: 0; }
   .commit:hover { background: color-mix(in srgb, var(--series) 4%, transparent); }
   .commit .date { flex: none; color: var(--faint); font-size: 12px; width: 82px;
@@ -252,7 +268,7 @@ const SYNC_KEY = "tach";
 const COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
 
 const state = { page: "graphs", stat: null, view: "pct", range: "all", from: "", to: "",
-                q: "", before: "", after: "", fs: "", data: null,
+                q: "", before: "", after: "", fs: "", sort: "delta", hidecats: "", data: null,
                 releasesBySha: Object.create(null), cards: [], overview: null, modal: null };
 
 const $ = id => document.getElementById(id);
@@ -459,6 +475,8 @@ function readHash(){
   if(SHA_RE.test(p.get("before") || "")) state.before = p.get("before");
   if(SHA_RE.test(p.get("after") || "")) state.after = p.get("after");
   if(p.get("fs")) state.fs = p.get("fs");
+  if(p.get("sort") === "name") state.sort = "name";
+  if(p.get("hide")) state.hidecats = p.get("hide");
 }
 function writeHash(){
   const p = new URLSearchParams();
@@ -470,6 +488,8 @@ function writeHash(){
   if(state.before) p.set("before", state.before);
   if(state.after) p.set("after", state.after);
   if(state.fs) p.set("fs", state.fs);
+  if(state.sort !== "delta") p.set("sort", state.sort);
+  if(state.hidecats) p.set("hide", state.hidecats);
   history.replaceState(null, "", "#" + p.toString());
 }
 
@@ -758,7 +778,7 @@ function renderComparePage(host){
   if(!state.before || !recBySha(state.before)) state.before = def.before;
   if(!state.after || !recBySha(state.after)) state.after = def.after;
 
-  const bar = el("div","cmp-bar");
+  const head = el("div","card cmp-head");
   const mkSel = (which) => {
     const sel = el("select");
     sel.setAttribute("aria-label", which + " commit");
@@ -774,18 +794,62 @@ function renderComparePage(host){
     sel.addEventListener("change", () => { state[which] = sel.value; onControlChange(); });
     return sel;
   };
-  const lb = el("label"); lb.textContent = "before";
-  const la = el("label"); la.textContent = "after";
+  const mkSide = (which) => {
+    const side = el("div","cmp-side");
+    const role = el("div","role"); role.textContent = which;
+    const rec = recBySha(state[which]);
+    const idr = el("div","id mono");
+    const url = commitURL(rec.commit);
+    if(url){
+      const a = el("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = rec.commit.slice(0,7);
+      idr.appendChild(a);
+    } else idr.append(rec.commit.slice(0,7));
+    idr.append(" · " + (rec.date||"").slice(0,10));
+    const tag = state.releasesBySha[rec.commit];
+    if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; idr.appendChild(t); }
+    const msg = el("div","cmsg"); msg.textContent = rec.message || ""; msg.title = rec.message || "";
+    side.append(role, idr, msg, mkSel(which));
+    return side;
+  };
   const swap = el("button","swap"); swap.textContent = "⇄"; swap.title = "Swap commits";
   swap.addEventListener("click", () => {
     const t = state.before; state.before = state.after; state.after = t; onControlChange();
   });
-  bar.append(lb, mkSel("before"), swap, la, mkSel("after"));
-  host.appendChild(bar);
+  head.append(mkSide("before"), swap, mkSide("after"));
+  host.appendChild(head);
 
   const rb = recBySha(state.before), ra = recBySha(state.after);
   const q = state.q.toLowerCase();
-  const keys = Object.keys(ra.benchmarks).sort().filter(k => !q || k.toLowerCase().includes(q));
+  let keys = Object.keys(ra.benchmarks).sort().filter(k => !q || k.toLowerCase().includes(q));
+
+  // Sort order and per-category toggles for the table.
+  const catOf = k => k.includes("/") ? k.slice(0, k.indexOf("/")) : "other";
+  const counts = new Map();
+  for(const k of keys) counts.set(catOf(k), (counts.get(catOf(k)) || 0) + 1);
+  const hidden = new Set(state.hidecats.split(",").filter(c => counts.has(c)));
+  const ctl = el("div","cmp-ctl");
+  const slbl = el("span","lbl"); slbl.textContent = "sort";
+  const sortSeg = el("div","seg");
+  for(const [key, label] of [["delta", "Δ"], ["name", "name"]]){
+    const b = el("button"); b.textContent = label; b.ariaPressed = state.sort === key;
+    b.addEventListener("click", () => { state.sort = key; onControlChange(); });
+    sortSeg.appendChild(b);
+  }
+  ctl.append(slbl, sortSeg);
+  if(counts.size > 1){
+    for(const c of [...counts.keys()].sort()){
+      const b = el("button","cat"); b.textContent = c + " (" + counts.get(c) + ")";
+      b.ariaPressed = !hidden.has(c);
+      b.title = (hidden.has(c) ? "Show " : "Hide ") + c + " benchmarks";
+      b.addEventListener("click", () => {
+        hidden.has(c) ? hidden.delete(c) : hidden.add(c);
+        state.hidecats = [...hidden].join(","); onControlChange();
+      });
+      ctl.appendChild(b);
+    }
+  }
+  keys = keys.filter(k => !hidden.has(catOf(k)));
   const rows = [];
   let logSum = 0, n = 0, worse = 0, better = 0;
   for(const k of keys){
@@ -795,25 +859,29 @@ function renderComparePage(host){
       if(pct >= CHIP_EPS) worse++; else if(pct <= -CHIP_EPS) better++; }
     rows.push({ key: k, vb, va, pct });
   }
+  if(state.sort === "name") rows.sort((a,b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  else rows.sort((a,b) => (b.pct == null) - (a.pct == null) || (b.pct||0) - (a.pct||0));
+
+  if(rows.length){
+    const sum = el("div","card cmp-summary");
+    const g = n ? (Math.exp(logSum/n) - 1) * 100 : null;
+    const big = el("span","big mono"); big.textContent = fmtPct(g);
+    if(g != null && Math.abs(g) >= CHIP_EPS) big.classList.add(g > 0 ? "bad" : "good");
+    const lbl = el("span","lbl");
+    lbl.textContent = statDef().label.toLowerCase() + " geomean · " + n + " benchmarks · " +
+      worse + " regressed · " + better + " improved (≥" + CHIP_EPS + "%)";
+    sum.append(big, lbl);
+    if(regimeKey(rb) !== regimeKey(ra)){
+      const warn = el("span","lbl"); warn.style.color = getVar("--bad");
+      warn.textContent = "⚠ different measurement environments — not directly comparable (" +
+        envChangeDesc(rb, ra) + ")";
+      sum.appendChild(warn);
+    }
+    host.appendChild(sum);
+  }
+  host.appendChild(ctl);
   if(rows.length === 0)
     return host.appendChild(Object.assign(el("div","empty"), { textContent: "No benchmarks match." }));
-  rows.sort((a,b) => (b.pct == null) - (a.pct == null) || (b.pct||0) - (a.pct||0));
-
-  const sum = el("div","card cmp-summary");
-  const g = n ? (Math.exp(logSum/n) - 1) * 100 : null;
-  const big = el("span","big mono"); big.textContent = fmtPct(g);
-  if(g != null && Math.abs(g) >= CHIP_EPS) big.classList.add(g > 0 ? "bad" : "good");
-  const lbl = el("span","lbl");
-  lbl.textContent = statDef().label.toLowerCase() + " geomean · " + n + " benchmarks · " +
-    worse + " regressed · " + better + " improved (≥" + CHIP_EPS + "%)";
-  sum.append(big, lbl);
-  if(regimeKey(rb) !== regimeKey(ra)){
-    const warn = el("span","lbl"); warn.style.color = getVar("--bad");
-    warn.textContent = "⚠ different measurement environments — not directly comparable (" +
-      envChangeDesc(rb, ra) + ")";
-    sum.appendChild(warn);
-  }
-  host.appendChild(sum);
 
   const wrap = el("div","card"); wrap.style.overflow = "hidden";
   const tbl = el("table","cmp");
@@ -872,10 +940,19 @@ function renderCommitsPage(host){
     const date = el("span","date"); date.textContent = (r.date||"").slice(0,10);
     const sha = el("a","sha"); sha.textContent = (r.commit||"").slice(0,7);
     const url = commitURL(r.commit);
-    if(url){ sha.href = url; sha.target = "_blank"; sha.rel = "noopener";
-             sha.addEventListener("click", e => e.stopPropagation()); }
+    if(url){ sha.href = url; sha.target = "_blank"; sha.rel = "noopener"; }
     const msg = el("span","msg"); msg.textContent = r.message || ""; msg.title = r.message || "";
-    row.append(date, sha, msg);
+    row.append(date, sha);
+    if(prev){
+      const cmp = el("button","cmpbtn"); cmp.textContent = "⇄"; cmp.title = "Compare against predecessor";
+      cmp.setAttribute("aria-label", "Compare " + (r.commit||"").slice(0,7) + " against its predecessor");
+      cmp.addEventListener("click", () => {
+        state.before = prev.commit; state.after = r.commit; state.page = "compare"; onControlChange();
+        window.scrollTo(0, 0);
+      });
+      row.appendChild(cmp);
+    }
+    row.append(msg);
     const tag = state.releasesBySha[r.commit];
     if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; row.appendChild(t); }
     if(prev && regimeKey(prev) !== regimeKey(r)){
@@ -899,17 +976,6 @@ function renderCommitsPage(host){
     else if(pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(pct); }
     else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(pct); }
     row.appendChild(chip);
-    if(prev){
-      const goCompare = () => {
-        state.before = prev.commit; state.after = r.commit; state.page = "compare"; onControlChange();
-        window.scrollTo(0, 0);
-      };
-      const cmp = el("button","cmpbtn"); cmp.textContent = "⇄"; cmp.title = "Compare against predecessor";
-      cmp.setAttribute("aria-label", "Compare " + (r.commit||"").slice(0,7) + " against its predecessor");
-      cmp.addEventListener("click", e => { e.stopPropagation(); goCompare(); });
-      row.appendChild(cmp);
-      row.addEventListener("click", goCompare);
-    } else { row.style.cursor = "default"; }
     list.appendChild(row);
   }
   host.appendChild(list);
