@@ -2,9 +2,8 @@
 # repository (not forks) — e.g. a maintainer-only workflow. It benchmarks and
 # comments in one job.
 #
-# This is an ALTERNATIVE to benchmark.yml + report.yml — install one setup or the
-# other, never both (they also share a concurrency group, so they would cancel
-# each other).
+# This is an ALTERNATIVE to benchmark.yml + report.yml — install one setup or
+# the other, never both.
 #
 # WARNING: do NOT switch this to `pull_request_target` to make it work for forks.
 # That would run untrusted PR code with a write token. For fork support use the
@@ -46,53 +45,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Read-only noise source: the default-branch time series published by
-      # track.yml, extracted into a fresh dir outside the checkout.
-      - name: Fetch published history (read-only noise source)
-        run: |
-          dest="${RUNNER_TEMP}/tacho-history"
-          rm -rf "$dest"; mkdir -p "$dest"
-          if git fetch --no-tags --depth=1 origin gh-pages 2>/dev/null; then
-            git archive FETCH_HEAD benchmarks/data 2>/dev/null | tar -x -C "$dest" 2>/dev/null || true
-          fi
-        continue-on-error: true
-
-      # Fetch the comment.sh / mark-running.sh helpers from the action repo. This
-      # job holds `pull-requests: write`, so pin `ref` to an immutable commit SHA,
-      # not a mutable tag like v1.
-      - uses: actions/checkout@v4
-        with:
-          repository: KristofferC/Tachometer.jl
-          ref: 0000000000000000000000000000000000000000   # <-- replace with a pinned commit SHA
-          path: .tachometer-action
-
-      # On a re-push the comment still shows the previous commit's numbers, and
-      # the benchmark below takes a while. Flag it before starting so nobody reads
-      # it as current. No-ops on the first run (no comment yet).
-      - name: Flag previous results as re-running
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bash .tachometer-action/scripts/mark-running.sh \
-            "${{ github.repository }}" \
-            "${{ github.event.pull_request.number }}" \
-            "tachometer" \
-            "${{ github.event.pull_request.head.sha }}" \
-            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
       - id: bench
-        uses: KristofferC/Tachometer.jl@v1   # pin to a SHA in production
+        # This single action measures, uploads the report, updates the sticky
+        # comment, and applies the optional regression gate.
+        uses: KristofferC/Tachometer.jl@v1   # pin to a full SHA in production
         with:
           nruns: "3"
-          noise-history: ${{ runner.temp }}/tacho-history/benchmarks/data
-
-      - name: Post sticky comment
-        if: always() && steps.bench.outputs.report != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bash .tachometer-action/scripts/comment.sh \
-            "${{ github.repository }}" \
-            "${{ github.event.pull_request.number }}" \
-            "tachometer" \
-            "${{ steps.bench.outputs.report }}"
+          comment: "true"

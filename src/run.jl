@@ -9,7 +9,7 @@
 #      (or use the live working tree for the `:workingtree` sentinel),
 #   2. build a fresh temporary project that `dev`s the package from that source
 #      plus the suite's own dependencies (copied, never mutated),
-#   3. run `benchmark/benchmarks.jl` (which must define `const SUITE`) in a
+#   3. run `benchmark/benchmarks.jl` (which must assign a `SUITE`) in a
 #      separate process and serialise the `BenchmarkGroup` to JSON,
 #   4. load it back and reduce it to per-benchmark `Estimate`s.
 
@@ -260,7 +260,8 @@ function _write_driver(srcdir, script, outfile, retune, verbose)
 
     using BenchmarkTools
     Base.include(Main, _SCRIPT)
-    isdefined(Main, :SUITE) || error("benchmark script did not define `SUITE`")
+    isdefined(Main, :SUITE) ||
+        error("benchmark script did not assign a BenchmarkGroup to `SUITE`")
     suite = Main.SUITE::BenchmarkGroup
 
     paramsfile = joinpath(_BENCHDIR, "tune.json")

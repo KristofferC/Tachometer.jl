@@ -1,0 +1,156 @@
+name: "Tachometer reporter"
+description: >-
+  Safely re-render and post Tachometer reports produced by an untrusted
+  pull_request workflow.
+
+inputs:
+  julia-version:
+    description: "Julia version used by the trusted report renderer."
+    default: "1"
+  markers:
+    description: >-
+      Comma-separated sticky-comment markers to flag as stale when a new run
+      starts. List every marker used by a benchmark matrix.
+    default: "tachometer"
+
+runs:
+  using: composite
+  steps:
+    # A requested event arrives when a new benchmark run starts. Mark the old
+    # sticky comment immediately, before spending time setting up Julia.
+    - name: Mark previous results stale
+      if: github.event.action == 'requested'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        RUN_URL: ${{ github.event.workflow_run.html_url }}
+        MARKERS: ${{ inputs.markers }}
+        TACHO_ROOT: ${{ github.action_path }}/..
+      run: |
+        set -euo pipefail
+        pr="$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+          | jq -r --arg b "$HEAD_BRANCH" --arg r "$HEAD_REPO" \
+            '[.[] | select(.state=="open" and .head.ref==$b and .head.repo.full_name==$r)][0].number // empty')"
+        if [ -z "$pr" ]; then
+          echo "no matching open PR for ${HEAD_SHA}; nothing to mark"
+          exit 0
+        fi
+        IFS=',' read -ra markers <<< "$MARKERS"
+        for marker in "${markers[@]}"; do
+          # Trim around comma-separated entries; whitespace inside a marker is
+          # still invalid and must not silently change its identity.
+          marker="${marker#"${marker%%[![:space:]]*}"}"
+          marker="${marker%"${marker##*[![:space:]]}"}"
+          [[ "$marker" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            echo "invalid Tachometer marker: $marker"
+            exit 1
+          }
+          bash "$TACHO_ROOT/scripts/mark-running.sh" \
+            "$REPO" "$pr" "$marker" "$HEAD_SHA" "$RUN_URL"
+        done
+
+    # Resolve the PR solely from the trusted workflow_run event. The artifact is
+    # deliberately not consulted for routing or authorization decisions.
+    - name: Resolve target PR
+      id: pr
+      if: github.event.action == 'completed' && github.event.workflow_run.conclusion != 'cancelled'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+      run: |
+        set -euo pipefail
+        pr="$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+          | jq -r --arg b "$HEAD_BRANCH" --arg r "$HEAD_REPO" \
+            '[.[] | select(.state=="open" and .head.ref==$b and .head.repo.full_name==$r)][0].number // empty')"
+        if [ -z "$pr" ]; then
+          echo "no matching open PR for ${HEAD_SHA}; skipping"
+          exit 0
+        fi
+        current="$(gh api "repos/${REPO}/pulls/${pr}" --jq '.head.sha')"
+        if [ "$current" != "$HEAD_SHA" ]; then
+          echo "PR #${pr} has advanced; skipping stale report"
+          exit 0
+        fi
+        echo "number=${pr}" >> "$GITHUB_OUTPUT"
+
+    # This action runs with a write token. Consumers that require a fully pinned
+    # supply chain should replace these third-party tags with reviewed commit SHAs.
+    - uses: julia-actions/setup-julia@v2
+      if: steps.pr.outputs.number != ''
+      with:
+        version: ${{ inputs.julia-version }}
+
+    - uses: julia-actions/cache@v2
+      if: steps.pr.outputs.number != ''
+
+    - name: Install trusted renderer
+      if: steps.pr.outputs.number != ''
+      shell: bash
+      env:
+        TACHO_ROOT: ${{ github.action_path }}/..
+        TACHO_ENV: ${{ runner.temp }}/tachometer-reporter
+      run: |
+        julia --color=yes -e '
+          using Pkg
+          Pkg.activate(ENV["TACHO_ENV"])
+          Pkg.develop(PackageSpec(path = ENV["TACHO_ROOT"]))
+          Pkg.instantiate()
+        '
+
+    - name: Download report artifacts
+      if: steps.pr.outputs.number != ''
+      uses: actions/download-artifact@v4
+      with:
+        pattern: tachometer-report-*
+        path: ${{ runner.temp }}/tachometer-artifacts
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ github.token }}
+
+    - name: Re-render and post
+      if: steps.pr.outputs.number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ steps.pr.outputs.number }}
+        HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        RUN_ID: ${{ github.event.workflow_run.id }}
+        TACHO_ROOT: ${{ github.action_path }}/..
+        TACHO_ENV: ${{ runner.temp }}/tachometer-reporter
+        ARTIFACTS: ${{ runner.temp }}/tachometer-artifacts
+      run: |
+        set -euo pipefail
+        current="$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha')"
+        if [ "$current" != "$HEAD_SHA" ]; then
+          echo "PR #${PR} has advanced; skipping stale report"
+          exit 0
+        fi
+
+        shopt -s nullglob
+        for dir in "$ARTIFACTS"/*/; do
+          [ -f "$dir/report.json" ] || continue
+          bytes="$(wc -c < "$dir/report.json")"
+          if [ "$bytes" -gt 2000000 ]; then
+            echo "report.json too large; skipping $dir"
+            continue
+          fi
+          marker="$(cat "$dir/marker.txt" 2>/dev/null || echo tachometer)"
+          [[ "$marker" =~ ^[A-Za-z0-9._-]+$ ]] || marker=tachometer
+          TACHOMETER_MODE=render \
+            TACHOMETER_MARKER="$marker" \
+            TACHOMETER_RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${RUN_ID}" \
+            TACHOMETER_REPORT_IN="$dir/report.json" \
+            TACHOMETER_REPORT_OUT="$dir/rendered.md" \
+            julia --project="$TACHO_ENV" --startup-file=no -e \
+              'using Tachometer; Tachometer.main()'
+          bash "$TACHO_ROOT/scripts/comment.sh" \
+            "$REPO" "$PR" "$marker" "$dir/rendered.md"
+        done

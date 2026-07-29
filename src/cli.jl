@@ -29,10 +29,10 @@ function main(; io = stdout)
 
     report = compare(repo;
         baseline, target, script,
-        time_tolerance = _envf("TACHOMETER_TIME_TOLERANCE", 0.05),
-        memory_tolerance = _envf("TACHOMETER_MEMORY_TOLERANCE", 0.05),
+        time_tolerance = _env_nonempty("TACHOMETER_TIME_TOLERANCE", "5%"),
+        memory_tolerance = _env_nonempty("TACHOMETER_MEMORY_TOLERANCE", "5%"),
         time_floor = _env("TACHOMETER_TIME_FLOOR", "1us"),
-        memory_floor = _envf("TACHOMETER_MEMORY_FLOOR", 0.0),
+        memory_floor = _env_nonempty("TACHOMETER_MEMORY_FLOOR", "0"),
         nruns = _envi("TACHOMETER_NRUNS", 1),
         threads = _envi("TACHOMETER_THREADS", 1),
         retune = _envb("TACHOMETER_RETUNE", false),
@@ -117,6 +117,9 @@ function _main_publish(io)
 end
 
 _env(name, default) = get(ENV, name, default)
+_env_nonempty(name, default) = let value = get(ENV, name, "")
+    isempty(value) ? default : value
+end
 _emptyto_nothing(s) = isempty(s) ? nothing : s
 _envf(name, default) = haskey(ENV, name) && !isempty(ENV[name]) ? parse(Float64, ENV[name]) : default
 _envi(name, default) = haskey(ENV, name) && !isempty(ENV[name]) ? parse(Int, ENV[name]) : default

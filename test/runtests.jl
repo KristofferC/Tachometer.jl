@@ -3,7 +3,8 @@ using Test
 using Dates
 
 using Tachometer: Estimate, Measurement, Meta, Report, RevisionRun, NoiseModel,
-    _judge, _classify_time, _classify_memory, _combine, _as_ns, build_noise_from_history,
+    _judge, _classify_time, _classify_memory, _combine, _as_ns, _as_fraction, _as_bytes,
+    build_noise_from_history,
     effective_time_tolerance, prettytime, prettymemory, _signed_pct,
     regressions, improvements, invariants, tradeoffs, added, removed, suppressed, compared,
     project_version, last_release_tag, _release_baseline, WORKINGTREE, _write_driver, _run_julia,
@@ -39,6 +40,30 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         @test _as_ns("3ms") == 3.0e6
         @test _as_ns("1s") == 1.0e9
         @test _as_ns("100") == 100.0
+        @test _as_fraction(0.05) == 0.05
+        @test _as_fraction("0.05") == 0.05
+        @test _as_fraction("5%") == 0.05
+        @test _as_fraction(" 2.5 % ") == 0.025
+        @test_throws ErrorException _as_fraction("five percent")
+        @test_throws ErrorException _as_fraction("5")
+        @test_throws ErrorException _as_fraction(1)
+        @test_throws ErrorException _as_fraction(-0.1)
+        @test_throws ErrorException _as_fraction(NaN)
+        @test _as_bytes(1024) == 1024.0
+        @test _as_bytes("1 KiB") == 1024.0
+        @test _as_bytes("1.5 MB") == 1.5e6
+        @test_throws ErrorException _as_bytes("a lot")
+        @test_throws ErrorException _as_bytes("1.2.3")
+        @test_throws ErrorException _as_bytes(-1)
+        withenv("TACHOMETER_TIME_TOLERANCE" => "") do
+            @test Tachometer._env_nonempty("TACHOMETER_TIME_TOLERANCE", "5%") == "5%"
+        end
+
+        # The common local form needs neither a repository path nor awkward
+        # numeric notation. An empty baseline returns before running benchmarks.
+        local_report = compare(; baseline = "", time_tolerance = "5%",
+            memory_floor = "1 KiB", verbose = false)
+        @test local_report.status === :not_comparable
     end
 
     @testset "classification" begin
@@ -571,6 +596,13 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         @test occursin("→", out)           # before -> after absolute values
         @test occursin("+45%", out)        # signed percentage, not a bare ratio
         @test occursin("Tachometer.jl</sub>", out)
+
+        # Returning the report directly at the REPL gives a compact plain-text
+        # result instead of dumping every struct field or GitHub-only markup.
+        plain = sprint(show, MIME"text/plain"(), r)
+        @test occursin("Tachometer: 1 regression", plain)
+        @test occursin("🔴 g/hot:", plain)
+        @test !occursin("<!--", plain)
     end
 
     @testset "render: yellow states never read as success" begin

@@ -10,14 +10,14 @@ in a separate Julia process. Tachometer does not modify the package checkout.
 
 ## Set up a benchmark suite
 
-The default entrypoint is `benchmark/benchmarks.jl`. It must define a
+The default entrypoint is `benchmark/benchmarks.jl`. It must assign a
 `BenchmarkGroup` named `SUITE`:
 
 ```julia
 using BenchmarkTools
 using MyPackage
 
-const SUITE = BenchmarkGroup()
+SUITE = BenchmarkGroup()
 SUITE["scalar"] = @benchmarkable MyPackage.f(1)
 SUITE["array"] = @benchmarkable MyPackage.f(x) setup=(x = rand(1_000))
 ```
@@ -39,9 +39,9 @@ Choose one of the supplied PR setups:
 | Same-repository and fork PRs | [`benchmark.yml`](examples/benchmark.yml) and [`report.yml`](examples/report.yml) |
 | Same-repository PRs only | [`simple.yml`](examples/simple.yml) |
 
-These are alternatives. Do not install all three workflows. The action itself
-measures and uploads results; the supplied workflows contain the steps that post
-the PR comment.
+These are alternatives. Do not install all three workflows. The simple action
+posts directly; the fork-safe setup keeps measurement and commenting in separate
+security contexts.
 
 ### Fork-safe setup
 
@@ -56,11 +56,12 @@ forks.
    - In `benchmark.yml`, replace
      `KristofferC/Tachometer.jl@v1` with
      `KristofferC/Tachometer.jl@<full-commit-sha>`.
-   - In `report.yml`, replace both all-zero `ref` values with the same SHA.
+   - In `report.yml`, replace the all-zero SHA in the reporter action with the
+     same SHA.
 
 3. Change the `branches` filters to match the package's default branch.
-4. Check the Julia version and benchmark runner. `benchmark.yml` uses Julia `1`
-   and `ubuntu-24.04-arm`.
+4. Check the Julia version and benchmark runner. `benchmark.yml` uses the
+   action's Julia `1` default and `ubuntu-24.04-arm`.
 5. Commit both workflows to the default branch. The reporting workflow becomes
    active only after it is present there.
 
@@ -78,8 +79,7 @@ re-renders the comment itself. Do not replace this setup with
 If all benchmarked PRs come from branches in the same repository:
 
 1. Copy [`simple.yml`](examples/simple.yml) to `.github/workflows/`.
-2. Replace its all-zero `ref` and
-   `KristofferC/Tachometer.jl@v1` with the same full Tachometer commit SHA.
+2. Replace `KristofferC/Tachometer.jl@v1` with a full Tachometer commit SHA.
 3. Change the `branches` filters, Julia version, and runner as needed.
 4. Commit the workflow.
 
@@ -117,7 +117,7 @@ adjust them after observing the suite.
   with:
     julia-version: "1.11"
     nruns: "3"
-    time-tolerance: "0.05"
+    time-tolerance: "5%"
     time-floor: "1us"
     fail-on-regression: "true"
 ```
@@ -138,17 +138,18 @@ them.
 | `script` | `benchmark/benchmarks.jl` | Benchmark entrypoint relative to `package` |
 | `baseline` | PR merge-base; otherwise `HEAD~1` | Revision used as the baseline |
 | `target` | PR head; otherwise `HEAD` | Revision being tested |
-| `time-tolerance` | `0.05` | Relative time change required to report a change |
-| `memory-tolerance` | `0.05` | Relative memory change required to report a change |
+| `time-tolerance` | `5%` | Relative time change required to report a change; `0.05` also works |
+| `memory-tolerance` | `5%` | Relative memory change required to report a change; `0.05` also works |
 | `time-floor` | `1us` | Absolute time change also required |
-| `memory-floor` | `0` | Absolute memory change in bytes also required |
+| `memory-floor` | `0` | Absolute memory change also required; accepts bytes or sizes such as `1 KiB` |
 | `nruns` | `1` | Interleaved baseline/target passes; every pass must agree |
 | `threads` | `1` | `JULIA_NUM_THREADS` used by benchmark processes |
 | `verbose` | `true` | Print benchmark names and subprocess output to the job log |
 | `fail-on-regression` | `false` | Fail the job when a regression is confirmed |
 | `release-baseline` | `true` | On a version bump, compare with the previous release |
 | `marker` | `tachometer` | Sticky-comment identifier |
-| `noise-history` | unset | Path to default-branch tracking data used as a read-only noise model |
+| `noise-history` | `auto` | Fetch tracking data from `gh-pages`; use `none` to disable or provide a data-directory path |
+| `comment` | `false` | Post the PR comment directly (same-repository PRs only) |
 
 The action exposes three outputs:
 
@@ -164,9 +165,8 @@ gets a comment when the check fails. The action does not gate when Julia files
 in the benchmark script's directory changed between the revisions, because the
 suites may no longer be comparable.
 
-For a benchmark matrix, give every job a distinct `marker`. Use the same markers
-when calling the comment helper scripts; the example workflows contain notes on
-where to add them.
+For a benchmark matrix, give every job a distinct `marker` and list those
+markers in the reporter action; `report.yml` contains an example.
 
 ## How results are judged
 
@@ -254,20 +254,24 @@ Pkg.add(
 )
 ```
 
-Then compare the current working tree, including uncommitted changes, with a
-committed baseline:
+Then compare the current working tree, including uncommitted changes, with its
+current `HEAD`:
 
 ```julia
 using Tachometer
 
-report = compare("."; baseline = "main")
-print(render(report))
+compare()
 ```
 
-Or compare two explicit revisions:
+The returned report displays a compact summary at the REPL. Use
+`print(render(report))` when you specifically want the GitHub-flavoured Markdown.
+
+To compare the whole branch with `main`, or compare two explicit revisions:
 
 ```julia
-report = compare("path/to/MyPackage";
+compare(; baseline = "main")
+
+compare("path/to/MyPackage";
     baseline = "v1.2.0",
     target = "feature-branch",
     nruns = 3,
@@ -275,8 +279,8 @@ report = compare("path/to/MyPackage";
 )
 ```
 
-`baseline` and `target` accept git revisions. The local default for `target` is
-`Tachometer.WORKINGTREE`; the local default for `release_baseline` is `false`.
+`baseline` and `target` accept git revisions. The local defaults are `HEAD` and
+`WORKINGTREE`, respectively; `release_baseline` defaults to `false`.
 Action inputs that also exist as `compare` keywords use underscores instead of
 dashes.
 

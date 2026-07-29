@@ -57,6 +57,49 @@ function render(r::Report; max_rows::Int = 8, byte_limit::Int = 60000)
     return base(max_rows, "in the run artifact") * note * footer
 end
 
+# A Report should be useful when returned directly at the REPL. Keep this plain
+# text (rather than printing the GitHub-only marker/details markup from `render`)
+# and focus on changes; the full Markdown remains available explicitly.
+function Base.show(io::IO, ::MIME"text/plain", r::Report)
+    nreg = length(regressions(r))
+    headline = r.status === :ok ? "no performance regressions" :
+        r.status === :regressed ? "$(nreg) regression$(_s(nreg))" :
+        r.status === :not_comparable ? "nothing to compare" :
+        "benchmarks did not complete"
+    println(io, "Tachometer: ", headline)
+
+    if !isempty(r.meta.baseline_ref) || !isempty(r.meta.target_ref)
+        baseline = isempty(r.meta.baseline_ref) ? "baseline" : r.meta.baseline_ref
+        target = isempty(r.meta.target_ref) ? "target" : r.meta.target_ref
+        println(io, "  ", baseline, " → ", target)
+    end
+    if r.status in (:not_comparable, :errored) && !isempty(r.message)
+        print(io, "  ", replace(_tail(r.message; n = 8, chars = 1000), '\n' => "\n  "))
+        return
+    end
+
+    changed = vcat(regressions(r), tradeoffs(r), improvements(r))
+    max_rows = get(io, :limit, true) ? 20 : length(changed)
+    for m in Iterators.take(changed, max_rows)
+        icon = m.verdict === :regression ? "🔴" :
+            m.verdict === :tradeoff ? "🟡" : "🟢"
+        print(io, "  ", icon, " ", m.key, ": ", _time_cell(m))
+        memory = _mem_cell(m)
+        memory == "—" || print(io, "; ", memory)
+        println(io)
+    end
+    length(changed) > max_rows &&
+        println(io, "  … and ", length(changed) - max_rows, " more changes")
+
+    extras = String[]
+    ninvariant = length(invariants(r))
+    ninvariant > 0 && push!(extras, "$(ninvariant) unchanged")
+    nadded, nremoved = length(added(r)), length(removed(r))
+    nadded > 0 && push!(extras, "$(nadded) added")
+    nremoved > 0 && push!(extras, "$(nremoved) removed")
+    isempty(extras) || print(io, "  ", join(extras, ", "))
+end
+
 # --- pieces ----------------------------------------------------------------
 
 function _header(io, r::Report)
