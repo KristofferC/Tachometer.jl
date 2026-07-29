@@ -97,6 +97,21 @@
   .group h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
               color: var(--muted); margin: 26px 4px 10px; font-weight: 650; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  /* Group jump navigation on the graphs page */
+  .gwrap { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 4px 20px;
+           align-items: start; }
+  .gwrap .group { scroll-margin-top: 10px; }
+  .sidenav { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 2px;
+             max-height: calc(100vh - 24px); overflow-y: auto; padding-top: 18px; }
+  .sidenav a { color: var(--muted); font-size: 12.5px; padding: 5px 10px; border-radius: 6px; }
+  .sidenav a:hover { color: var(--ink); text-decoration: none;
+                     background: color-mix(in srgb, var(--series) 6%, transparent); }
+  .sidenav a.on { color: var(--ink); font-weight: 600; background: var(--series-soft); }
+  .sidenav .cnt { color: var(--faint); font-size: 11px; }
+  @media (max-width: 1000px){
+    .gwrap { grid-template-columns: 1fr; }
+    .sidenav { display: none; }
+  }
   .bench { padding: 10px 12px 4px; min-width: 0; }
   .bench-head { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 4px; }
   .bench-head .name { font-size: 12.5px; font-weight: 600; min-width: 0; overflow: hidden;
@@ -329,7 +344,31 @@ function envChangeDesc(prev, r){
 
 // --- data loading ------------------------------------------------------------
 
+// Favicon: prefer the Documenter docs' icon — the docs live as siblings of the
+// benchmarks/ subdir on gh-pages — falling back to the header gauge.
+async function setFavicon(){
+  const link = document.createElement("link");
+  link.rel = "icon";
+  for(const p of ["../stable/assets/favicon.ico", "../dev/assets/favicon.ico"]){
+    try {
+      const r = await fetch(p, { method: "HEAD" });
+      if(r.ok && /image|icon/.test(r.headers.get("content-type") || "")){
+        link.href = p; link.type = "image/x-icon";
+        document.head.appendChild(link);
+        return;
+      }
+    } catch(_){}
+  }
+  link.href = "data:image/svg+xml," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+    '<path d="M4 17 A9 9 0 1 1 20 17" fill="none" stroke="#0a7ea6" stroke-width="2.4" stroke-linecap="round"/>' +
+    '<line x1="12" y1="14.5" x2="17" y2="8" stroke="#b42318" stroke-width="2" stroke-linecap="round"/>' +
+    '<circle cx="12" cy="15" r="1.6" fill="#62707d"/></svg>');
+  document.head.appendChild(link);
+}
+
 async function load(){
+  setFavicon();
   const theme = new URLSearchParams(location.search).get("theme");
   if(theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
   let doc;
@@ -596,6 +635,7 @@ let observer = null, roTimer = null;
 
 function teardown(){
   $("tooltip").style.display = "none";
+  if(state.scrollFn){ window.removeEventListener("scroll", state.scrollFn); state.scrollFn = null; }
   closeModal(false);
   for(const c of state.cards) if(c.chart) c.chart.destroy();
   if(state.overview && state.overview.chart) state.overview.chart.destroy();
@@ -643,13 +683,42 @@ function renderGraphsPage(host){
     if(!groups.has(g)) groups.set(g, []);
     groups.get(g).push(s);
   }
-  for(const g of [...groups.keys()].sort((a,b) => (b==="")-(a==="") || (a<b?-1:1))){
+  const ordered = [...groups.keys()].sort((a,b) => (b==="")-(a==="") || (a<b?-1:1));
+  const wrap = el("div","gwrap");
+  const main = el("div");
+  const nav = ordered.length > 1 ? el("nav","sidenav") : null;
+  if(nav) nav.setAttribute("aria-label", "Benchmark groups");
+  const sections = [];
+  for(const g of ordered){
     const sec = el("section","group");
     if(g){ const h = el("h2"); h.textContent = g; sec.appendChild(h); }
     const grid = el("div","grid");
     for(const s of groups.get(g)) grid.appendChild(renderCard(recs, xs, s, markers));
     sec.appendChild(grid);
-    host.appendChild(sec);
+    main.appendChild(sec);
+    if(nav){
+      const a = el("a"); a.href = "#";
+      a.append((g || "other") + " ");
+      const c = el("span","cnt"); c.textContent = groups.get(g).length;
+      a.appendChild(c);
+      // scrollIntoView instead of an anchor href — the hash carries app state.
+      a.addEventListener("click", e => { e.preventDefault(); sec.scrollIntoView({ behavior: "smooth" }); });
+      nav.appendChild(a);
+      sections.push([sec, a]);
+    }
+  }
+  if(nav) wrap.appendChild(nav);
+  wrap.appendChild(main);
+  host.appendChild(wrap);
+  if(nav){
+    const onScroll = () => {
+      let cur = sections[0];
+      for(const s of sections) if(s[0].getBoundingClientRect().top <= 90) cur = s;
+      for(const s of sections) s[1].classList.toggle("on", s === cur);
+    };
+    state.scrollFn = onScroll;
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
   }
   if(state.fs && state.ctx.byKey.has(state.fs)) openModal(state.fs);
   else if(state.fs){ state.fs = ""; writeHash(); }
