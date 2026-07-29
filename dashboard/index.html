@@ -276,10 +276,31 @@ function commitURL(sha){
   return base.replace(/\/+$/,"") + "/commit/" + sha;
 }
 
-// Fingerprint identity of a record's measurement regime (CPU/OS/Julia/threads/suite).
+// Fingerprint identity of a record's measurement regime (hardware/OS/Julia).
+// The suite hash is deliberately left out — editing the benchmark script does
+// not invalidate the history of the benchmarks that didn't change — and Julia
+// is coarsened to major.minor since patch releases rarely shift timings.
+const REGIME_FIELDS = [
+  ["os", f => f.os], ["arch", f => f.arch],
+  ["julia", f => String(f.julia == null ? "" : f.julia).split(".").slice(0, 2).join(".")],
+  ["cpu", f => f.cpu], ["threads", f => f.threads], ["backend", f => f.backend],
+];
 function regimeKey(r){
   const f = r.fingerprint || {};
-  return [f.os, f.arch, f.julia, f.cpu, f.threads, f.backend, f.suite].join("|");
+  return REGIME_FIELDS.map(([, get]) => get(f)).join("|");
+}
+
+// Human-readable summary of what changed in the regime between two records,
+// e.g. "cpu: Apple M1 (Virtual) → ARM Neoverse-N2".
+function envChangeDesc(prev, r){
+  const fa = (prev || {}).fingerprint || {}, fb = (r || {}).fingerprint || {};
+  const parts = [];
+  for(const [name, get] of REGIME_FIELDS){
+    const a = get(fa), b = get(fb);
+    if(String(a ?? "") !== String(b ?? ""))
+      parts.push(name + ": " + (a ?? "?") + " → " + (b ?? "?"));
+  }
+  return parts.join(", ");
 }
 
 // --- data loading ------------------------------------------------------------
@@ -465,39 +486,55 @@ function filteredKeys(){
 }
 
 // Per-benchmark values for the current stat over `recs`; null where absent.
-function seriesFor(recs, key){
+// `bases[i]` is the first value recorded in the same environment segment as
+// record i, so percent views re-baseline at each regime change instead of
+// comparing against a different machine. `base`/`last` belong to the newest
+// segment with data (what the chips report).
+function seriesFor(recs, key, seg){
   const vals = recs.map(r => {
     const b = hasOwn(r.benchmarks, key) ? r.benchmarks[key] : null;
     const v = b ? b[state.stat] : null;
     return (typeof v === "number" && isFinite(v)) ? v : null;
   });
+  const segBase = [], bases = new Array(vals.length).fill(null);
   let base = null, last = null;
-  for(const v of vals){ if(v != null){ if(base == null) base = v; last = v; } }
-  return { vals, base, last };
+  for(let i = 0; i < vals.length; i++){
+    const s = seg[i];
+    if(segBase[s] == null && vals[i] != null) segBase[s] = vals[i];
+    bases[i] = segBase[s] == null ? null : segBase[s];
+    if(vals[i] != null){ last = vals[i]; base = segBase[s]; }
+  }
+  return { vals, bases, base, last };
 }
 
-const toPct = (vals, base) => vals.map(v => (v != null && base > 0) ? (v/base - 1) * 100 : null);
+const toPct = (vals, bases) =>
+  vals.map((v, i) => (v != null && bases[i] > 0) ? (v/bases[i] - 1) * 100 : null);
 
-// Geomean of per-benchmark ratios (vs each one's first value in range), as % change.
+// Geomean of per-benchmark ratios (each vs its first value in the same
+// environment segment), as % change.
 function overviewSeries(recs, series){
   return recs.map((_, i) => {
     let logSum = 0, n = 0;
     for(const s of series){
-      const v = s.vals[i];
-      if(v != null && s.base > 0){ logSum += Math.log(v / s.base); n++; }
+      const v = s.vals[i], b = s.bases[i];
+      if(v != null && b > 0){ logSum += Math.log(v / b); n++; }
     }
     return n ? (Math.exp(logSum / n) - 1) * 100 : null;
   });
 }
 
-// Indices where a release was tagged / the measurement regime changed.
+// Indices where a release was tagged / the measurement regime changed, plus
+// each record's environment-segment id (`seg[i]` increments at every change).
 function markerIndices(recs){
-  const rel = [], env = [];
+  const rel = [], env = [], seg = new Array(recs.length).fill(0);
   for(let i = 0; i < recs.length; i++){
     if(state.releasesBySha[recs[i].commit]) rel.push(i);
-    if(i > 0 && regimeKey(recs[i]) !== regimeKey(recs[i-1])) env.push(i);
+    if(i > 0){
+      seg[i] = seg[i-1];
+      if(regimeKey(recs[i]) !== regimeKey(recs[i-1])){ env.push(i); seg[i]++; }
+    }
   }
-  return { rel, env };
+  return { rel, env, seg };
 }
 
 function statValue(rec, key){
@@ -533,21 +570,21 @@ function renderGraphsPage(host){
   const recs = visibleRecords();
   if(recs.length === 0) return showEmpty("No records in this time range.");
   const xs = recs.map(r => r.date_unix != null ? r.date_unix : Date.parse(r.date)/1000);
+  const markers = markerIndices(recs);
   const series = [];
   for(const k of filteredKeys()){
-    const s = seriesFor(recs, k);
+    const s = seriesFor(recs, k, markers.seg);
     if(s.base != null) series.push(Object.assign(s, { key: k }));
   }
   if(series.length === 0)
     return showEmpty(state.q ? "No benchmarks match the filter." : "No data for this statistic in this range.");
-  const markers = markerIndices(recs);
   state.ctx = { recs, xs, markers, byKey: new Map(series.map(s => [s.key, s])) };
 
   host.appendChild(renderOverview(recs, xs, series, markers));
   if(markers.env.length){
     const n = el("div","ov-note");
     n.textContent = markers.env.length + " environment change" + (markers.env.length>1?"s":"") +
-      " in range (dotted lines) — values across them are not directly comparable";
+      " in range (dotted lines) — percent changes restart from each environment's own first commit";
     host.appendChild(n);
   }
 
@@ -584,7 +621,9 @@ function renderOverview(recs, xs, series, markers){
   what.textContent = statDef().label.toLowerCase() + ", geomean of " + series.length +
                      " benchmark" + (series.length>1?"s":"");
   const since = el("div","since");
-  since.textContent = "vs " + (recs[0].date || "").slice(0,10) + " · " + recs.length + " commits";
+  // Baseline of the newest environment segment, not necessarily the range start.
+  const s0 = recs[markers.seg.indexOf(markers.seg[markers.seg.length-1])];
+  since.textContent = "vs " + (s0.date || "").slice(0,10) + " · " + recs.length + " commits";
   ro.append(big, what, since);
 
   const wrap = el("div","ov-chart"); const plot = el("div","plot");
@@ -603,8 +642,8 @@ function renderCard(recs, xs, s, markers){
   head.insertBefore(val, head.lastChild);
   const plot = el("div","plot");
   card.append(head, plot);
-  const c = { kind: "bench", key: s.key, plotEl: plot, recs, xs, base: s.base,
-              ys: state.view === "pct" ? toPct(s.vals, s.base) : s.vals, markers, chart: null };
+  const c = { kind: "bench", key: s.key, plotEl: plot, recs, xs, bases: s.bases,
+              ys: state.view === "pct" ? toPct(s.vals, s.bases) : s.vals, markers, chart: null };
   state.cards.push(c); plot.dataset.card = String(state.cards.length - 1);
   observer.observe(plot);
   return card;
@@ -616,7 +655,7 @@ function deltaChip(s){
   if(pct == null || Math.abs(pct) < CHIP_EPS){ chip.classList.add("flat"); chip.textContent = pct == null ? "—" : "· " + fmtPct(pct); }
   else if(pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(pct); }
   else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(pct); }
-  chip.title = "vs start of range";
+  chip.title = "vs first value in the current environment (within range)";
   return chip;
 }
 
@@ -655,8 +694,8 @@ function openModal(key){
   modal.append(head, plot); overlay.appendChild(modal);
   overlay.addEventListener("click", e => { if(e.target === overlay) closeModal(true); });
   document.body.appendChild(overlay);
-  const c = { kind: "bench", labeled: true, key: s.key, plotEl: plot, recs, xs, base: s.base,
-              ys: state.view === "pct" ? toPct(s.vals, s.base) : s.vals, markers, chart: null };
+  const c = { kind: "bench", labeled: true, key: s.key, plotEl: plot, recs, xs, bases: s.bases,
+              ys: state.view === "pct" ? toPct(s.vals, s.bases) : s.vals, markers, chart: null };
   state.modal = { overlay, c, key };
   initChart(c);
   close.focus();
@@ -742,7 +781,8 @@ function renderComparePage(host){
   sum.append(big, lbl);
   if(regimeKey(rb) !== regimeKey(ra)){
     const warn = el("span","lbl"); warn.style.color = getVar("--bad");
-    warn.textContent = "⚠ different measurement environments — not directly comparable";
+    warn.textContent = "⚠ different measurement environments — not directly comparable (" +
+      envChangeDesc(rb, ra) + ")";
     sum.appendChild(warn);
   }
   host.appendChild(sum);
@@ -803,7 +843,8 @@ function renderCommitsPage(host){
     const tag = state.releasesBySha[r.commit];
     if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; row.appendChild(t); }
     if(prev && regimeKey(prev) !== regimeKey(r)){
-      const t = el("span","chip flat"); t.textContent = "env"; t.title = "measurement environment changed";
+      const t = el("span","chip flat"); t.textContent = "env";
+      t.title = "measurement environment changed — " + envChangeDesc(prev, r);
       row.appendChild(t);
     }
     row.appendChild(el("span","spacer"));
@@ -843,15 +884,23 @@ function initChart(c){
   const fmtY = pctMode ? fmtPct : fmtAbs;
   const axisFont = "10.5px ui-monospace, Menlo, Consolas, monospace";
   const w = c.plotEl.clientWidth || 320, h = c.plotEl.clientHeight || 130;
+  // One uPlot series per environment segment (identically styled), so the line
+  // breaks at regime changes instead of drawing a misleading connector.
+  const seg = c.markers.seg;
+  const nSeg = seg.length ? seg[seg.length-1] + 1 : 1;
+  const ysSplit = nSeg === 1 ? [c.ys] :
+    Array.from({ length: nSeg }, (_, s) => c.ys.map((v, i) => seg[i] === s ? v : null));
+  const mkSeries = ys => ({
+    stroke: getVar("--series"), width: 1.5, spanGaps: true,
+    points: { show: ys.reduce((n, v) => n + (v != null), 0) === 1, size: 5 },
+    fill: pctMode ? undefined : getVar("--series-soft"),
+  });
   const opts = {
     width: w, height: h, legend: { show: false }, pxAlign: 1,
     cursor: { sync: { key: SYNC_KEY, setSeries: false }, points: { size: 6 },
               drag: { x: false, y: false } },
     scales: { x: { time: true } },
-    series: [ {}, {
-      stroke: getVar("--series"), width: 1.5, spanGaps: true, points: { show: false },
-      fill: pctMode ? undefined : getVar("--series-soft"),
-    } ],
+    series: [ {}, ...ysSplit.map(mkSeries) ],
     axes: [
       { stroke: getVar("--faint"), font: axisFont, size: 26, space: 80,
         grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 } },
@@ -862,7 +911,7 @@ function initChart(c){
     ],
     plugins: [ markerPlugin(c, labeled), zeroLinePlugin(pctMode), hoverPlugin(c) ],
   };
-  c.chart = new uPlot(opts, [c.xs, c.ys], c.plotEl);
+  c.chart = new uPlot(opts, [c.xs, ...ysSplit], c.plotEl);
   c.plotEl.querySelector(".u-over").addEventListener("click", () => {
     const idx = c.chart.cursor.idx; if(idx == null) return;
     const url = commitURL(c.recs[idx].commit); if(url) window.open(url, "_blank", "noopener");
@@ -935,16 +984,22 @@ function hoverPlugin(c){
       if(tag){ const t = el("span","tag"); t.textContent = tag; head.appendChild(t); }
       tt.appendChild(head);
       if(r.message){ const m = el("div","msg"); m.textContent = r.message; tt.appendChild(m); }
+      if(c.markers.env.includes(idx)){
+        const e = el("div","msg");
+        e.textContent = "env changed: " + envChangeDesc(c.recs[idx-1], r);
+        tt.appendChild(e);
+      }
       const row = el("div","num");
       if(c.kind === "overview"){
         row.textContent = "geomean " + fmtPct(c.ys[idx]);
       } else {
         const v = statValue(r, c.key);
         row.append(shortName(c.key) + ": " + fmtAbs(v));
-        const pv = (c.base > 0 && v != null) ? (v/c.base - 1)*100 : null;
+        const base = c.bases ? c.bases[idx] : null;
+        const pv = (base > 0 && v != null) ? (v/base - 1)*100 : null;
         if(pv != null){
           const d = el("span","delta " + (Math.abs(pv) < CHIP_EPS ? "" : pv > 0 ? "bad" : "good"));
-          d.textContent = "  " + fmtPct(pv) + " vs start";
+          d.textContent = "  " + fmtPct(pv) + (c.markers.env.length ? " vs env start" : " vs start");
           row.append(d);
         }
       }
