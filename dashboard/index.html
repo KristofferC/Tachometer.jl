@@ -100,9 +100,12 @@
   /* Group jump navigation on the graphs page */
   .gwrap { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 4px 20px;
            align-items: start; }
-  .gwrap .group { scroll-margin-top: 10px; }
-  .sidenav { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 2px;
-             max-height: calc(100vh - 24px); overflow-y: auto; padding-top: 18px; }
+  /* --barh tracks the sticky bar's height (set from JS) so jump targets and
+     the sidenav clear it instead of sliding underneath. */
+  .gwrap .group { scroll-margin-top: calc(var(--barh, 44px) + 10px); }
+  .sidenav { position: sticky; top: calc(var(--barh, 44px) + 12px);
+             display: flex; flex-direction: column; gap: 2px;
+             max-height: calc(100vh - var(--barh, 44px) - 24px); overflow-y: auto; padding-top: 18px; }
   .sidenav a { color: var(--muted); font-size: 12.5px; padding: 5px 10px; border-radius: 6px; }
   .sidenav a:hover { color: var(--ink); text-decoration: none;
                      background: color-mix(in srgb, var(--series) 6%, transparent); }
@@ -713,7 +716,7 @@ function renderGraphsPage(host){
   if(nav){
     const onScroll = () => {
       let cur = sections[0];
-      for(const s of sections) if(s[0].getBoundingClientRect().top <= 90) cur = s;
+      for(const s of sections) if(s[0].getBoundingClientRect().top <= barH + 48) cur = s;
       for(const s of sections) s[1].classList.toggle("on", s === cur);
     };
     state.scrollFn = onScroll;
@@ -1230,6 +1233,21 @@ document.addEventListener("touchstart", e => {
 document.addEventListener("mousemove", e => {
   if(!e.target.closest || !e.target.closest(".u-over")) $("tooltip").style.display = "none";
 });
+
+// Keep --barh in sync with the sticky bar's real height (it wraps on narrow
+// screens), so scroll-margin-top, the sidenav offset and the scroll spy all
+// clear it.
+let barH = 0;
+{
+  const bar = document.querySelector(".bar");
+  const setBarH = () => {
+    barH = bar.offsetHeight;
+    document.documentElement.style.setProperty("--barh", barH + "px");
+    if(state.scrollFn) state.scrollFn();
+  };
+  new ResizeObserver(setBarH).observe(bar);
+  setBarH();
+}
 
 window.addEventListener("resize", () => {
   clearTimeout(roTimer);
