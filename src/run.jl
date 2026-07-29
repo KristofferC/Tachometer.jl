@@ -235,7 +235,7 @@ function run_revision(
         # callgrind, precompile for the CPU target valgrind's virtual CPU
         # supports, so the simulated process loads caches instead of compiling.
         envdir = mktempdir(; prefix = "tachometer_env_")
-        prep = _write_prepare_driver(srcdir, script, envdir)
+        prep = _write_prepare_driver(srcdir, script, envdir; precompile = backend !== :callgrind)
         push!(tmpfiles, prep)
         strip_cpu_target = backend === :callgrind
         prepenv = copy(subenv)
@@ -244,6 +244,22 @@ function run_revision(
         success(proc.code) ||
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
                 "environment preparation failed\n" * _tail(proc.log))
+
+        # Phase 1b (callgrind): build/verify caches loadable under valgrind's
+        # virtual CPU, with compilation itself running natively (see
+        # _write_import_driver). Without this the measured process would
+        # silently recompile the whole dependency tree inside the simulator.
+        if backend === :callgrind
+            imp = _write_import_driver(envdir)
+            push!(tmpfiles, imp)
+            vgnone = String[string(valgrind), "--tool=none", "--quiet", "--smc-check=all-non-file",
+                "--trace-children=no"]
+            impcmd = Cmd(vcat(vgnone, _julia_cmd(imp; strip_cpu_target).exec))
+            proc = _run_julia(setenv(impcmd, _envvec(prepenv)); stream, io, prefix)
+            success(proc.code) ||
+                return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
+                    "precompilation for the callgrind target failed\n" * _tail(proc.log))
+        end
 
         # Phase 2: run the suite (under callgrind when asked).
         outfile = tempname() * ".json"
@@ -315,7 +331,11 @@ _odometer_src() = dirname(dirname(pathof(Odometer)))
 
 # Phase-1 driver: build the ephemeral project (so the caller's repo is
 # untouched), dev-install the package and Odometer, instantiate + precompile.
-function _write_prepare_driver(srcdir, script, envdir)
+# For callgrind runs the plain native precompile is skipped: it would be a
+# no-op (`Pkg.precompile` considers existing native caches fresh — the CPU
+# target is not part of its staleness check) and useless to the simulated
+# process anyway; the import driver below builds the right caches instead.
+function _write_prepare_driver(srcdir, script, envdir; precompile::Bool = true)
     benchdir = dirname(joinpath(srcdir, script))
     code = """
     using Pkg
@@ -336,7 +356,28 @@ function _write_prepare_driver(srcdir, script, envdir)
     # available regardless of what the suite project declared.
     Pkg.develop([PackageSpec(path = _SRC), PackageSpec(path = _ODOMETER)]; io = devnull)
     Pkg.instantiate(; io = devnull)
-    Pkg.precompile(; io = devnull)
+    $(precompile ? "Pkg.precompile(; io = devnull)" : "")
+    """
+    path = tempname() * ".jl"
+    write(path, code)
+    return path
+end
+
+# Phase-1b driver (callgrind only): import every project dependency. Run under
+# `valgrind --tool=none` WITHOUT tracing children: the loader then sees
+# valgrind's virtual CPU and rejects exactly the caches the measured process
+# would reject, while the precompile workers it spawns are child processes that
+# escape valgrind and compile at native speed (with the JULIA_CPU_TARGET the
+# environment carries). Self-verifying — the simulated parent loads what the
+# workers produced — and incremental: when the caches are already loadable
+# under valgrind this is just a (cheap, uninstrumented) load pass.
+function _write_import_driver(envdir)
+    code = """
+    using Pkg
+    Pkg.activate($(repr(envdir)); io = devnull)
+    for (name, uuid) in Pkg.project().dependencies
+        Base.require(Base.PkgId(uuid, name))
+    end
     """
     path = tempname() * ".jl"
     write(path, code)
