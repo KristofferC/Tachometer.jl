@@ -167,6 +167,10 @@
   .commit .msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .commit .spacer { flex: 1; }
   .commit .chip { font-size: 11px; }
+  .commit .cmpbtn { flex: none; border: 1px solid var(--hairline); background: none;
+                    color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
+                    padding: 3px 7px; border-radius: 6px; align-self: center; }
+  .commit .cmpbtn:hover { color: var(--ink); border-color: var(--faint); }
   .tl-hint { color: var(--faint); font-size: 11.5px; margin: 8px 4px 12px; }
 
   #tooltip { position: fixed; pointer-events: none; z-index: 20; display: none; max-width: 360px;
@@ -849,7 +853,7 @@ function renderCommitsPage(host){
   const hint = el("div","tl-hint");
   hint.textContent = "Δ is the " + statDef().label.toLowerCase() +
     " geomean vs the previous benchmarked commit" + (state.q ? " (filtered benchmarks)" : "") +
-    " — click a commit to compare it against its predecessor.";
+    " — ⇄ shows the full comparison against the predecessor.";
   host.appendChild(hint);
 
   const list = el("div","card timeline");
@@ -887,10 +891,15 @@ function renderCommitsPage(host){
     else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(pct); }
     row.appendChild(chip);
     if(prev){
-      row.addEventListener("click", () => {
+      const goCompare = () => {
         state.before = prev.commit; state.after = r.commit; state.page = "compare"; onControlChange();
         window.scrollTo(0, 0);
-      });
+      };
+      const cmp = el("button","cmpbtn"); cmp.textContent = "⇄"; cmp.title = "Compare against predecessor";
+      cmp.setAttribute("aria-label", "Compare " + (r.commit||"").slice(0,7) + " against its predecessor");
+      cmp.addEventListener("click", e => { e.stopPropagation(); goCompare(); });
+      row.appendChild(cmp);
+      row.addEventListener("click", goCompare);
     } else { row.style.cursor = "default"; }
     list.appendChild(row);
   }
