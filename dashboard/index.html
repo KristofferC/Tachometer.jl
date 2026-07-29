@@ -137,7 +137,7 @@
   .cmp-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
   .cmp-bar label { color: var(--muted); font-size: 12px; }
   .cmp-bar select { max-width: 340px; border: 1px solid var(--hairline); border-radius: 8px;
-    background: var(--card); color: var(--ink); font-size: 12.5px; padding: 6px 8px;
+    background: var(--card); color: var(--ink); font-size: 12.5px; padding: 6px 26px 6px 8px;
     font-family: ui-monospace, Menlo, Consolas, monospace; }
   .cmp-bar .swap { border: 1px solid var(--hairline); background: var(--card); color: var(--muted);
                    border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 13px; }
@@ -575,6 +575,7 @@ function statValue(rec, key){
 let observer = null, roTimer = null;
 
 function teardown(){
+  $("tooltip").style.display = "none";
   closeModal(false);
   for(const c of state.cards) if(c.chart) c.chart.destroy();
   if(state.overview && state.overview.chart) state.overview.chart.destroy();
@@ -818,10 +819,18 @@ function renderComparePage(host){
   const tbl = el("table","cmp");
   const thead = el("thead"); const trh = el("tr");
   const mkTh = (txt, cls) => { const th = el("th", cls); th.textContent = txt; return th; };
-  trh.append(mkTh("Benchmark"),
-             mkTh(state.before.slice(0,7) + " · " + (rb.date||"").slice(0,10), "num"),
-             mkTh(state.after.slice(0,7) + " · " + (ra.date||"").slice(0,10), "num"),
-             mkTh("Δ", "num"));
+  const mkShaTh = (sha, rec) => {
+    const th = el("th","num");
+    const url = commitURL(sha);
+    if(url){
+      const a = el("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = sha.slice(0,7);
+      th.appendChild(a);
+    } else th.append(sha.slice(0,7));
+    th.append(" · " + (rec.date||"").slice(0,10));
+    return th;
+  };
+  trh.append(mkTh("Benchmark"), mkShaTh(state.before, rb), mkShaTh(state.after, ra), mkTh("Δ", "num"));
   thead.appendChild(trh); tbl.appendChild(thead);
   const tbody = el("tbody");
   for(const r of rows){
@@ -963,10 +972,17 @@ function initChart(c){
   over.addEventListener("touchmove", touchCursor, { passive: true });
   over.addEventListener("touchend", () => { lastTouch = performance.now(); c.touch = false; }, { passive: true });
   over.addEventListener("touchcancel", () => { c.touch = false; }, { passive: true });
+  // Clicking a point opens the predecessor comparison for that commit; the
+  // GitHub links live on the compare and commits pages.
   over.addEventListener("click", () => {
     if(performance.now() - lastTouch < 700) return;
     const idx = c.chart.cursor.idx; if(idx == null) return;
-    const url = commitURL(c.recs[idx].commit); if(url) window.open(url, "_blank", "noopener");
+    const all = state.data.records;
+    const i = all.findIndex(r => r.commit === c.recs[idx].commit);
+    if(i <= 0) return;
+    closeModal(true);
+    state.before = all[i-1].commit; state.after = all[i].commit; state.page = "compare";
+    onControlChange(); window.scrollTo(0, 0);
   });
 }
 
