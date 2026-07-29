@@ -243,6 +243,9 @@ const RANGES = [
 ];
 const CHIP_EPS = 1.0;   // |Δ%| below this renders as neutral (likely noise)
 const SYNC_KEY = "tach";
+// Touch devices get larger axis/marker type — 10.5px canvas text is
+// unreadable at phone viewing distances.
+const COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
 
 const state = { page: "graphs", stat: null, view: "pct", range: "all", from: "", to: "",
                 q: "", before: "", after: "", fs: "", data: null,
@@ -902,7 +905,7 @@ function initChart(c){
   const labeled = isOverview || c.labeled;
   const pctMode = isOverview || state.view === "pct";
   const fmtY = pctMode ? fmtPct : fmtAbs;
-  const axisFont = "10.5px ui-monospace, Menlo, Consolas, monospace";
+  const axisFont = (COARSE ? 13 : 10.5) + "px ui-monospace, Menlo, Consolas, monospace";
   const w = c.plotEl.clientWidth || 320, h = c.plotEl.clientHeight || 130;
   // One uPlot series per environment segment (identically styled), so the line
   // breaks at regime changes instead of drawing a misleading connector.
@@ -922,10 +925,10 @@ function initChart(c){
     scales: { x: { time: true } },
     series: [ {}, ...ysSplit.map(mkSeries) ],
     axes: [
-      { stroke: getVar("--faint"), font: axisFont, size: 26, space: 80,
+      { stroke: getVar("--faint"), font: axisFont, size: COARSE ? 42 : 26, space: COARSE ? 100 : 80,
         grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 } },
       { stroke: getVar("--faint"), font: axisFont, size: autoAxisSize,
-        space: labeled ? 34 : 30, gap: 4,
+        space: labeled ? (COARSE ? 42 : 34) : (COARSE ? 38 : 30), gap: 4,
         grid: { stroke: getVar("--grid"), width: 1 }, ticks: { show: false },
         values: (u, vals) => vals.map(fmtY) },
     ],
@@ -972,16 +975,18 @@ function autoAxisSize(u, values, axisIdx, cycleNum){
 // measurement-regime changes (dotted) — regime changes can look like perf changes.
 function markerPlugin(c, labeled){
   return { hooks: { draw: u => {
-    const ctx = u.ctx;
+    // The draw hook works in raw canvas pixels, so scale by devicePixelRatio.
+    const ctx = u.ctx, dpr = devicePixelRatio || 1;
     ctx.save();
     const draw = (idxs, color, dash, label) => {
-      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.setLineDash(dash); ctx.lineWidth = 1;
-      ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
+      ctx.strokeStyle = color; ctx.fillStyle = color;
+      ctx.setLineDash(dash.map(d => d * dpr)); ctx.lineWidth = dpr;
+      ctx.font = Math.round((COARSE ? 12 : 10) * dpr) + "px ui-monospace, Menlo, Consolas, monospace";
       for(const i of idxs){
         const x = Math.round(u.valToPos(u.data[0][i], "x", true));
         if(x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
         ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top + u.bbox.height); ctx.stroke();
-        if(labeled && label) ctx.fillText(label(i), x + 4, u.bbox.top + 10);
+        if(labeled && label) ctx.fillText(label(i), x + 4*dpr, u.bbox.top + 10*dpr);
       }
     };
     draw(c.markers.env, getVar("--faint"), [1,3], labeled ? (() => "env") : null);
@@ -999,7 +1004,8 @@ function zeroLinePlugin(pctMode){
     if(sc.min == null || sc.min > 0 || sc.max < 0) return;
     const y = Math.round(u.valToPos(0, "y", true));
     const ctx = u.ctx;
-    ctx.save(); ctx.strokeStyle = getVar("--faint"); ctx.lineWidth = 1; ctx.setLineDash([]);
+    ctx.save(); ctx.strokeStyle = getVar("--faint");
+    ctx.lineWidth = devicePixelRatio || 1; ctx.setLineDash([]);
     ctx.globalAlpha = 0.6;
     ctx.beginPath(); ctx.moveTo(u.bbox.left, y); ctx.lineTo(u.bbox.left + u.bbox.width, y); ctx.stroke();
     ctx.restore();
