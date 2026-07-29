@@ -1,5 +1,5 @@
 # A tiny suite so Tachometer can dogfood itself (its own CI can benchmark PRs).
-using BenchmarkTools
+using Odometer
 using Tachometer
 
 const SUITE = BenchmarkGroup()

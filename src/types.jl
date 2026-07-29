@@ -8,21 +8,29 @@
     Estimate
 
 A single benchmark's summary statistic for one revision: wall-clock `time` in
-nanoseconds, `memory` in bytes, and allocation count `allocs`. `nothing` fields
-mean the benchmark was not present in that revision.
+nanoseconds, `memory` in bytes, allocation count `allocs`, and `instructions`
+executed per evaluation (`NaN` when the run's backend could not count them).
 """
 struct Estimate
-    time::Float64      # ns
-    memory::Float64    # bytes
+    time::Float64          # ns
+    memory::Float64        # bytes
     allocs::Float64
+    instructions::Float64  # NaN when not measured
 end
+
+Estimate(time::Real, memory::Real, allocs::Real) =
+    Estimate(Float64(time), Float64(memory), Float64(allocs), NaN)
+
+hasinstr(e::Estimate) = isfinite(e.instructions)
 
 # Verdict for a single benchmark. One of:
 #   :regression :improvement :invariant :tradeoff :added :removed :uncompared
-# and a `reason` describing what moved: :time, :memory, :both, :none.
+# and a `reason` naming what moved: :instructions, :time, :memory, :multiple,
+# :none.
 #
-# `:tradeoff` is "faster, but allocates more": reported for a human to weigh, but
-# not counted as a regression and never a reason to fail a build.
+# `:tradeoff` is "did less work / got faster, but allocates more": reported for
+# a human to weigh, but not counted as a regression and never a reason to fail
+# a build.
 
 """
     Measurement
@@ -30,8 +38,9 @@ end
 The comparison of one benchmark (identified by its `/`-joined `key`) between the
 baseline and target revisions.
 
-`time_ratio`/`mem_ratio` are `target / baseline` (a value `> 1` means the target
-is slower / allocates more). `confirmations` is how many of the `nruns` repeated
+The ratios are `target / baseline` (a value `> 1` means the target does more
+work / is slower / allocates more; `instr_ratio` is `nothing` when instruction
+counts were unavailable). `confirmations` is how many of the `nruns` repeated
 runs independently agreed with the headline verdict — used to guard against
 one-off noise on shared CI runners.
 """
@@ -41,6 +50,7 @@ struct Measurement
     target::Union{Estimate, Nothing}
     time_ratio::Union{Float64, Nothing}
     mem_ratio::Union{Float64, Nothing}
+    instr_ratio::Union{Float64, Nothing}
     verdict::Symbol
     reason::Symbol
     confirmations::Int
@@ -48,6 +58,12 @@ struct Measurement
     eff_time_tol::Float64   # per-benchmark time tolerance actually applied (>= global when noisy)
     suppressed::Bool        # would regress at the global tolerance, but sits inside the learned noise band
 end
+
+# Pre-instruction positional arity, used widely in tests and old callers.
+Measurement(key, baseline, target, time_ratio, mem_ratio, verdict::Symbol, reason::Symbol,
+    confirmations, nruns, eff_time_tol, suppressed) =
+    Measurement(key, baseline, target, time_ratio, mem_ratio, nothing, verdict, reason,
+        confirmations, nruns, eff_time_tol, suppressed)
 
 # The CPU the benchmarks ran on. On aarch64 Linux (e.g. the GitHub ubuntu-*-arm
 # runners) /proc/cpuinfo has no "model name" line, so libuv — and therefore
@@ -110,11 +126,15 @@ struct Meta
     target_sha::String
     julia_version::String
     cpu::String
+    backend::String         # "perf" | "callgrind" | "time" | "" (unknown/old reports)
     estimator::String
     time_tolerance::Float64
     memory_tolerance::Float64
+    instr_tolerance::Float64
+    time_guard_tolerance::Float64  # time tolerance applied when instructions are judged
     time_floor_ns::Float64
     memory_floor_bytes::Float64
+    instr_floor::Float64    # absolute instruction-delta floor
     nruns::Int
     suite_changed::Bool
     run_url::String
@@ -131,11 +151,15 @@ function Meta(;
         target_sha::AbstractString = "",
         julia_version::AbstractString = string(VERSION),
         cpu::AbstractString = _cpu_model(),
+        backend::AbstractString = "",
         estimator::AbstractString = "minimum",
         time_tolerance::Real = 0.05,
         memory_tolerance::Real = 0.05,
+        instr_tolerance::Real = 0.01,
+        time_guard_tolerance::Real = 0.25,
         time_floor_ns::Real = 1000.0,
         memory_floor_bytes::Real = 0.0,
+        instr_floor::Real = 1000.0,
         nruns::Integer = 1,
         suite_changed::Bool = false,
         run_url::AbstractString = "",
@@ -145,11 +169,17 @@ function Meta(;
     )
     return Meta(
         package, baseline_ref, baseline_sha, target_ref, target_sha,
-        julia_version, cpu, estimator, Float64(time_tolerance), Float64(memory_tolerance),
-        Float64(time_floor_ns), Float64(memory_floor_bytes), Int(nruns),
-        suite_changed, run_url, marker, timestamp, note,
+        julia_version, cpu, backend, estimator,
+        Float64(time_tolerance), Float64(memory_tolerance), Float64(instr_tolerance),
+        Float64(time_guard_tolerance),
+        Float64(time_floor_ns), Float64(memory_floor_bytes), Float64(instr_floor),
+        Int(nruns), suite_changed, run_url, marker, timestamp, note,
     )
 end
+
+# Whether wall time is a judged metric for this comparison. Under callgrind the
+# process runs in a simulator, so time carries no information.
+time_judged(m::Meta) = m.backend != "callgrind"
 
 """
     Report

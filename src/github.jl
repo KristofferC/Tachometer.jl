@@ -27,17 +27,21 @@ end
 # JSON cannot carry NaN/Inf; map non-finite numbers to null.
 _jsonnum(x) = (x isa Real && isfinite(x)) ? Float64(x) : nothing
 _est_to_dict(e) = e === nothing ? nothing :
-    Dict("time" => _jsonnum(e.time), "memory" => _jsonnum(e.memory), "allocs" => _jsonnum(e.allocs))
+    Dict("time" => _jsonnum(e.time), "memory" => _jsonnum(e.memory), "allocs" => _jsonnum(e.allocs),
+        "instructions" => _jsonnum(e.instructions))
 
 function report_to_dict(r::Report)
     m = r.meta
     return Dict(
-        "schema" => "tachometer-report", "version" => 1,
+        "schema" => "tachometer-report", "version" => 2,
         "status" => String(r.status), "message" => r.message,
         "meta" => Dict(
             "package" => m.package, "baseline_ref" => m.baseline_ref, "baseline_sha" => m.baseline_sha,
             "target_ref" => m.target_ref, "target_sha" => m.target_sha, "julia_version" => m.julia_version, "cpu" => m.cpu,
+            "backend" => m.backend,
             "estimator" => m.estimator, "time_tolerance" => m.time_tolerance, "memory_tolerance" => m.memory_tolerance,
+            "instr_tolerance" => m.instr_tolerance, "instr_floor" => m.instr_floor,
+            "time_guard_tolerance" => m.time_guard_tolerance,
             "time_floor_ns" => m.time_floor_ns, "memory_floor_bytes" => m.memory_floor_bytes, "nruns" => m.nruns,
             "suite_changed" => m.suite_changed, "run_url" => m.run_url, "marker" => m.marker,
             "timestamp" => m.timestamp, "note" => m.note,
@@ -46,6 +50,7 @@ function report_to_dict(r::Report)
             Dict(
                 "key" => x.key, "baseline" => _est_to_dict(x.baseline), "target" => _est_to_dict(x.target),
                 "time_ratio" => _jsonnum(x.time_ratio), "mem_ratio" => _jsonnum(x.mem_ratio),
+                "instr_ratio" => _jsonnum(x.instr_ratio),
                 "verdict" => String(x.verdict), "reason" => String(x.reason),
                 "confirmations" => x.confirmations, "nruns" => x.nruns,
                 "eff_time_tol" => _jsonnum(x.eff_time_tol), "suppressed" => x.suppressed,
@@ -57,7 +62,8 @@ end
 # --- deserialization (trusted side): validate shape, coerce numbers -----------
 
 const _VERDICTS = (:regression, :improvement, :invariant, :tradeoff, :added, :removed, :uncompared)
-const _REASONS = (:time, :memory, :both, :none)
+# :both is the pre-instructions name for :multiple, kept for old artifacts.
+const _REASONS = (:instructions, :time, :memory, :multiple, :both, :none)
 
 _num_or(x, default) = (x isa Real && isfinite(x)) ? Float64(x) : default
 _optnum(x) = (x isa Real && isfinite(x)) ? Float64(x) : nothing
@@ -67,7 +73,7 @@ _sym_in(x, allowed, default) = (x isa AbstractString && Symbol(x) in allowed) ? 
 function _est_from_dict(d)
     d isa AbstractDict || return nothing
     return Estimate(_num_or(get(d, "time", nothing), 0.0), _num_or(get(d, "memory", nothing), 0.0),
-        _num_or(get(d, "allocs", nothing), 0.0))
+        _num_or(get(d, "allocs", nothing), 0.0), _num_or(get(d, "instructions", nothing), NaN))
 end
 
 """
@@ -80,10 +86,12 @@ from an untrusted artifact without trusting its markdown.
 function report_from_dict(d)
     (d isa AbstractDict && get(d, "schema", nothing) == "tachometer-report") ||
         error("not a Tachometer report JSON")
-    get(d, "version", nothing) == 1 || error("unsupported Tachometer report version")
+    get(d, "version", nothing) in (1, 2) || error("unsupported Tachometer report version")
     get(d, "measurements", []) isa AbstractVector || error("report measurements are malformed")
     md = get(d, "meta", Dict{String, Any}())
     md isa AbstractDict || error("report meta is malformed")
+    backend = _str(get(md, "backend", ""))
+    backend in ("", "perf", "callgrind", "time") || (backend = "")
     meta = Meta(;
         package = _str(get(md, "package", "")), baseline_ref = _str(get(md, "baseline_ref", "")),
         baseline_sha = _str(get(md, "baseline_sha", "")), target_ref = _str(get(md, "target_ref", "")),
@@ -91,11 +99,15 @@ function report_from_dict(d)
         # "" when absent, never this machine's CPU: the trusted reporter re-renders
         # on a different runner than the one that produced the numbers.
         cpu = _str(get(md, "cpu", "")),
+        backend,
         estimator = _str(get(md, "estimator", "minimum")),
         time_tolerance = _num_or(get(md, "time_tolerance", nothing), 0.05),
         memory_tolerance = _num_or(get(md, "memory_tolerance", nothing), 0.05),
+        instr_tolerance = _num_or(get(md, "instr_tolerance", nothing), 0.01),
+        time_guard_tolerance = _num_or(get(md, "time_guard_tolerance", nothing), 0.25),
         time_floor_ns = _num_or(get(md, "time_floor_ns", nothing), 1000.0),
         memory_floor_bytes = _num_or(get(md, "memory_floor_bytes", nothing), 0.0),
+        instr_floor = _num_or(get(md, "instr_floor", nothing), 1000.0),
         nruns = round(Int, _num_or(get(md, "nruns", nothing), 1)),
         suite_changed = get(md, "suite_changed", false) === true,
         run_url = _str(get(md, "run_url", "")), marker = _str(get(md, "marker", "tachometer")),
@@ -104,11 +116,14 @@ function report_from_dict(d)
     ms = Measurement[]
     for x in get(d, "measurements", [])
         x isa AbstractDict || continue
+        reason = _sym_in(get(x, "reason", nothing), _REASONS, :none)
+        reason === :both && (reason = :multiple)
         push!(ms, Measurement(
             _str(get(x, "key", "")), _est_from_dict(get(x, "baseline", nothing)), _est_from_dict(get(x, "target", nothing)),
             _optnum(get(x, "time_ratio", nothing)), _optnum(get(x, "mem_ratio", nothing)),
+            _optnum(get(x, "instr_ratio", nothing)),
             _sym_in(get(x, "verdict", nothing), _VERDICTS, :invariant),
-            _sym_in(get(x, "reason", nothing), _REASONS, :none),
+            reason,
             round(Int, _num_or(get(x, "confirmations", nothing), 0)), round(Int, _num_or(get(x, "nruns", nothing), 1)),
             _num_or(get(x, "eff_time_tol", nothing), meta.time_tolerance), get(x, "suppressed", false) === true,
         ))
@@ -131,7 +146,10 @@ function render_report_file(in_json, out_md; marker = nothing, run_url = nothing
         r = Report(r.status, r.measurements,
             Meta(; package = m.package, baseline_ref = m.baseline_ref, baseline_sha = m.baseline_sha,
                 target_ref = m.target_ref, target_sha = m.target_sha, julia_version = m.julia_version,
-                cpu = m.cpu, estimator = m.estimator, time_tolerance = m.time_tolerance, memory_tolerance = m.memory_tolerance,
+                cpu = m.cpu, backend = m.backend, estimator = m.estimator,
+                time_tolerance = m.time_tolerance, memory_tolerance = m.memory_tolerance,
+                instr_tolerance = m.instr_tolerance, instr_floor = m.instr_floor,
+                time_guard_tolerance = m.time_guard_tolerance,
                 time_floor_ns = m.time_floor_ns, memory_floor_bytes = m.memory_floor_bytes, nruns = m.nruns,
                 suite_changed = m.suite_changed,
                 run_url = (run_url === nothing || isempty(run_url)) ? m.run_url : String(run_url),

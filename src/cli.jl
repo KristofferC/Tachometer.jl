@@ -29,13 +29,17 @@ function main(; io = stdout)
 
     report = compare(repo;
         baseline, target, script,
+        backend = Symbol(_envs("TACHOMETER_BACKEND", "auto")),
+        valgrind = _envs("TACHOMETER_VALGRIND", "valgrind"),
         time_tolerance = _envf("TACHOMETER_TIME_TOLERANCE", 0.05),
         memory_tolerance = _envf("TACHOMETER_MEMORY_TOLERANCE", 0.05),
+        instr_tolerance = _envf("TACHOMETER_INSTR_TOLERANCE", 0.01),
+        time_guard_tolerance = _envf("TACHOMETER_TIME_GUARD_TOLERANCE", 0.25),
         time_floor = _env("TACHOMETER_TIME_FLOOR", "1us"),
         memory_floor = _envf("TACHOMETER_MEMORY_FLOOR", 0.0),
+        instr_floor = _envf("TACHOMETER_INSTR_FLOOR", 1000.0),
         nruns = _envi("TACHOMETER_NRUNS", 1),
         threads = _envi("TACHOMETER_THREADS", 1),
-        tune = Symbol(_envs("TACHOMETER_TUNE", "auto")),
         verbose,
         stream = _envb("TACHOMETER_STREAM", verbose),
         io,
@@ -86,8 +90,10 @@ function _main_record(io)
     verbose = _envb("TACHOMETER_VERBOSE", true)
     rec = record_run(repo;
         script = _env("TACHOMETER_SCRIPT", "benchmark/benchmarks.jl"),
+        backend = resolve_backend(Symbol(_envs("TACHOMETER_BACKEND", "auto"));
+            valgrind = _envs("TACHOMETER_VALGRIND", "valgrind")),
+        valgrind = _envs("TACHOMETER_VALGRIND", "valgrind"),
         threads = _envi("TACHOMETER_THREADS", 1),
-        tune = Symbol(_envs("TACHOMETER_TUNE", "auto")),
         verbose,
         stream = _envb("TACHOMETER_STREAM", verbose),
         io,

@@ -14,12 +14,13 @@ _now_iso() = Dates.format(Dates.now(Dates.UTC), "yyyy-mm-ddTHH:MM:SS\\Z")
 # The measurement regime. Series recorded under different fingerprints are not
 # directly comparable (different CPU/OS/Julia can shift timings), so it is stored
 # with every record and shown in the dashboard.
-function _fingerprint(script_hash; threads)
+function _fingerprint(script_hash; threads, backend = "")
     return Dict(
         "os" => string(Sys.KERNEL),
         "arch" => string(Sys.ARCH),
         "julia" => string(VERSION),
         "threads" => threads,
+        "backend" => string(backend),
         "cpu" => _raw_cpu_model(),
         "suite" => script_hash,
     )
@@ -35,9 +36,10 @@ kept, so the record is always valid JSON.
 function record_run(
         repo::AbstractString;
         script::AbstractString = "benchmark/benchmarks.jl",
+        backend::Symbol = :time,
+        valgrind::AbstractString = "valgrind",
         env::AbstractDict = Dict{String, String}(),
         threads::Int = 1,
-        tune::Symbol = :auto,
         verbose::Bool = true,
         stream::Bool = verbose,
         io::IO = stdout,
@@ -45,13 +47,15 @@ function record_run(
     repo = abspath(repo)
     # Benchmark the committed HEAD (checked out into a worktree), not the live
     # working tree, so uncommitted changes can never be attributed to the commit.
-    rr = run_revision(repo, "HEAD", script; env, threads, tune, verbose, stream, io)
+    rr = run_revision(repo, "HEAD", script; backend, valgrind, env, threads, verbose, stream, io)
     rr.ok || error("benchmark run failed:\n" * rr.log)
 
     benches = Dict{String, Any}()
     for (k, e) in rr.estimates
         (isfinite(e.time) && isfinite(e.memory) && isfinite(e.allocs)) || continue
-        benches[k] = Dict("time" => e.time, "memory" => e.memory, "allocs" => e.allocs)
+        b = Dict{String, Any}("time" => e.time, "memory" => e.memory, "allocs" => e.allocs)
+        hasinstr(e) && (b["instructions"] = e.instructions)
+        benches[k] = b
     end
 
     v = project_version(repo, rr.sha)
@@ -63,7 +67,7 @@ function record_run(
         "message" => _git_meta(repo, rr.sha, "%s"),
         "julia_version" => string(VERSION),
         "version" => v === nothing ? nothing : string(v),
-        "fingerprint" => _fingerprint(rr.script_hash; threads),
+        "fingerprint" => _fingerprint(rr.script_hash; threads, backend = rr.backend),
         "benchmarks" => benches,
     )
 end

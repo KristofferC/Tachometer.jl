@@ -6,8 +6,9 @@ using Tachometer: Estimate, Measurement, Meta, Report, RevisionRun, NoiseModel,
     _judge, _classify_time, _classify_memory, _combine, _as_ns, build_noise_from_history,
     effective_time_tolerance, prettytime, prettymemory, _signed_pct,
     regressions, improvements, invariants, tradeoffs, added, removed, suppressed, compared,
-    project_version, last_release_tag, _release_baseline, WORKINGTREE, _write_driver, _run_julia,
-    run_revision,
+    project_version, last_release_tag, _release_baseline, WORKINGTREE,
+    _write_prepare_driver, _write_run_driver, _run_julia, _julia_cmd, _envvec,
+    run_revision, resolve_backend, hasinstr, _classify_instr, time_judged,
     load_index, load_shard, load_all_records, _releases, _shard_name, write_dashboard,
     report_to_dict, report_from_dict
 
@@ -20,6 +21,15 @@ function mkrun(pairs...; sha = "0123456789", hash = "h", ok = true)
         est[k] = Estimate(Float64(t), Float64(m), Float64(a))
     end
     return RevisionRun(sha, false, est, hash, ok, "")
+end
+
+# Like mkrun, but key => (time, memory, allocs, instructions), with a backend.
+function mkirun(pairs...; sha = "0123456789", hash = "h", backend = "perf")
+    est = Dict{String, Estimate}()
+    for (k, v) in pairs
+        est[k] = Estimate(Float64(v[1]), Float64(v[2]), Float64(v[3]), Float64(v[4]))
+    end
+    return RevisionRun(sha, false, est, hash, backend, true, "")
 end
 
 judge(base, targ; kw...) = _judge([base], [targ], NoiseModel();
@@ -122,26 +132,102 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         @test Report(:ok, ms, meta(), "").status === :ok
     end
 
+    @testset "instruction judging" begin
+        ij(base, targ; kw...) = judge(base, targ; judge_instr = true, kw...)
+
+        # The headline scenario: +30% instructions while time sits inside its 5%
+        # tolerance. Time-only judging would miss it.
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, 100_000)), mkirun("g/a" => (10_200, 0, 0, 130_000)))
+        @test only(ms).verdict === :regression
+        @test only(ms).reason === :instructions
+        @test only(ms).instr_ratio ≈ 1.3
+
+        # A relative blip below the absolute instruction floor stays invariant:
+        # +5% of 10k instructions is a 500-insn delta, under the 1000 floor.
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, 10_000)), mkirun("g/a" => (10_000, 0, 0, 10_500)))
+        @test only(ms).verdict === :invariant
+
+        # Without judge_instr (threads > 1, mixed backends) the same counts are
+        # carried for display but never judged.
+        ms = judge(mkirun("g/a" => (10_000, 0, 0, 100_000)), mkirun("g/a" => (10_200, 0, 0, 130_000)))
+        @test only(ms).verdict === :invariant
+        @test only(ms).instr_ratio ≈ 1.3
+
+        # Callgrind: time is not judged, so a big (simulated) time swing with
+        # flat instructions is invariant, and never marked suppressed.
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, 100_000); backend = "callgrind"),
+            mkirun("g/a" => (19_000, 0, 0, 100_000); backend = "callgrind"); judge_time = false)
+        @test only(ms).verdict === :invariant
+        @test !only(ms).suppressed
+
+        # Fewer instructions but more memory is a tradeoff, not a regression.
+        ms = ij(mkirun("g/a" => (10_000, 1000, 1, 100_000)), mkirun("g/a" => (9_800, 2000, 2, 80_000)))
+        @test only(ms).verdict === :tradeoff
+
+        # Instructions and time both firing gives reason :multiple.
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, 100_000)), mkirun("g/a" => (20_000, 0, 0, 200_000)))
+        @test only(ms).verdict === :regression
+        @test only(ms).reason === :multiple
+
+        # A pair with counts on only one side cannot confirm an instruction change.
+        v, _ = _classify_instr([(Estimate(1.0, 0.0, 0.0), Estimate(1.0, 0.0, 0.0, 5e6))], 0.01, 1000.0, 1)
+        @test v === :invariant
+
+        # combine: memory-only regression without an offsetting improvement stays
+        # a regression even when instructions are judged.
+        @test _combine(:invariant, :invariant, :regression) === (:regression, :memory)
+        @test _combine(:improvement, :invariant, :regression) === (:tradeoff, :memory)
+        @test _combine(:regression, :invariant, :improvement) === (:regression, :instructions)
+
+        # Rendering: counting reports gain an Instructions column; callgrind
+        # reports drop the Time column and say time was not judged.
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, 100_000)), mkirun("g/a" => (10_200, 0, 0, 130_000)))
+        mperf = Meta(; package = "Demo", baseline_sha = "aaaaaaa000", target_sha = "bbbbbbb111",
+            backend = "perf", timestamp = "now")
+        out = render(Report(:regressed, ms, mperf, ""))
+        @test occursin("| Instructions | Time | Memory |", out)
+        @test occursin("100 k → 130 k (+30%)", out)
+        mcall = Meta(; package = "Demo", baseline_sha = "aaaaaaa000", target_sha = "bbbbbbb111",
+            backend = "callgrind", timestamp = "now")
+        @test !time_judged(mcall) && time_judged(mperf)
+        out = render(Report(:regressed, ms, mcall, ""))
+        @test occursin("| Instructions | Memory |", out)
+        @test !occursin("| Time |", out)
+        @test occursin("wall time not judged", out)
+
+        # Report JSON v2 round-trips instructions, ratio and backend.
+        r = Report(:regressed, ms, mperf, "")
+        r2 = report_from_dict(report_to_dict(r))
+        @test only(r2.measurements).instr_ratio ≈ 1.3
+        @test hasinstr(only(r2.measurements).baseline)
+        @test only(r2.measurements).baseline.instructions == 100_000
+        @test r2.meta.backend == "perf"
+        @test r2.meta.instr_tolerance == r.meta.instr_tolerance
+    end
+
     @testset "benchmark driver" begin
-        # `verbose` reaches the subprocess's `run(suite; verbose = ...)` call, so a
-        # failing run's log names the benchmark it died on.
+        # `verbose` and the backend reach the subprocess's `run(suite; ...)` call,
+        # so a failing run's log names the benchmark it died on.
         dir = mktempdir()
         mkpath(joinpath(dir, "benchmark"))
         write(joinpath(dir, "benchmark", "benchmarks.jl"), "const SUITE = nothing\n")
-        for v in (true, false)
-            path = _write_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "out.json"), :auto, v)
+        for v in (true, false), b in (:perf, :time)
+            path = _write_run_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "env"),
+                joinpath(dir, "out.json"), b, v)
             code = read(path, String)
-            @test occursin("const _VERBOSE = $(v)", code)
-            @test occursin("run(suite; verbose = _VERBOSE)", code)
+            @test occursin("backend = $(repr(b)), verbose = $(repr(v))", code)
+            @test occursin("Odometer.save", code)
             rm(path; force = true)
         end
-        # `tune` is baked into the driver, and rejected early when invalid.
-        for t in (:auto, :never, :always)
-            path = _write_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "out.json"), t, true)
-            @test occursin("const _TUNE = $(repr(t))", read(path, String))
-            rm(path; force = true)
-        end
-        @test_throws ArgumentError run_revision(dir, "HEAD", "benchmark/benchmarks.jl"; tune = :sometimes)
+        prep = _write_prepare_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "env"))
+        @test occursin("Pkg.precompile", read(prep, String))
+        rm(prep; force = true)
+        # Only concrete backends reach run_revision; :auto must be resolved first.
+        @test_throws ArgumentError run_revision(dir, "HEAD", "benchmark/benchmarks.jl"; backend = :auto)
+        # An explicitly requested but unavailable backend errors instead of downgrading.
+        @test_throws ErrorException resolve_backend(:callgrind; valgrind = "no-such-valgrind-binary")
+        @test resolve_backend(:time) === :time
+        @test resolve_backend(:auto; valgrind = "no-such-valgrind-binary") in (:perf, :time)
     end
 
     @testset "streamed subprocess output" begin
@@ -155,7 +241,7 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         try
             # Streamed to `io` line by line, prefixed with the revision tag...
             sink = IOBuffer()
-            r = _run_julia(drv, copy(ENV); stream = true, io = sink, prefix = "[abc1234] ")
+            r = _run_julia(setenv(_julia_cmd(drv), _envvec(ENV)); stream = true, io = sink, prefix = "[abc1234] ")
             streamed = String(take!(sink))
             @test occursin("[abc1234] first", streamed)
             @test occursin("[abc1234] last", streamed)
@@ -165,7 +251,7 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
 
             # Off: nothing on `io`, but the log is unaffected.
             quiet = IOBuffer()
-            r2 = _run_julia(drv, copy(ENV); stream = false, io = quiet)
+            r2 = _run_julia(setenv(_julia_cmd(drv), _envvec(ENV)); stream = false, io = quiet)
             @test isempty(String(take!(quiet)))
             @test occursin("first", r2.log) && occursin("last", r2.log)
         finally
@@ -236,8 +322,8 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         mixed = [Dict("fingerprint" => fp(j), "benchmarks" => Dict("g/a" => Dict("time" => t)))
                  for (j, t) in (("1.10", 100.0), ("1.10", 100.0), ("1.10", 100.0), ("1.10", 100.0),
                                 ("1.11", 100.0), ("1.11", 150.0), ("1.11", 90.0), ("1.11", 140.0), ("1.11", 100.0))]
-        stable = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.10", "1"), min_samples = 3)
-        jittery = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.11", "1"), min_samples = 3)
+        stable = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.10", "1", ""), min_samples = 3)
+        jittery = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.11", "1", ""), min_samples = 3)
         @test effective_time_tolerance(stable, "g/a", 0.05) == 0.05    # stable regime keeps global tol
         @test effective_time_tolerance(jittery, "g/a", 0.05) > 0.3     # jittery regime widens
     end

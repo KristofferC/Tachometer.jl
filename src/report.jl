@@ -101,7 +101,13 @@ function _subtitle(io, r::Report)
         push!(parts, "$(_sha_or_ref(m.baseline_sha, m.baseline_ref, repo)) → $(_sha_or_ref(m.target_sha, m.target_ref, repo))")
     end
     push!(parts, "Julia $(_safetext(m.julia_version))")
-    push!(parts, "$(_pct0(m.time_tolerance)) tolerance")
+    if m.backend in ("perf", "callgrind")
+        push!(parts, "$(m.backend == "perf" ? "hardware" : "simulated") instruction counts")
+        push!(parts, "$(_pct1(m.instr_tolerance)) instr tolerance")
+        time_judged(m) && push!(parts, "$(_pct0(max(m.time_tolerance, m.time_guard_tolerance))) time guard")
+    else
+        push!(parts, "$(_pct0(m.time_tolerance)) tolerance")
+    end
     m.nruns > 1 && push!(parts, "$(m.nruns)× runs")
     nsup = length(suppressed(r))
     nsup > 0 && push!(parts, "$(nsup) suppressed as noise")
@@ -118,6 +124,36 @@ function _subtitle(io, r::Report)
     return
 end
 
+# Which columns a report's tables carry: Instructions only when any measurement
+# has counts; Time unless the backend makes it meaningless (callgrind) — except
+# that a report with neither counts nor judged time still shows Time rather
+# than an empty table.
+function _columns(r::Report)
+    has_instr = any(m -> m.instr_ratio !== nothing, r.measurements)
+    show_time = time_judged(r.meta) || !has_instr
+    return has_instr, show_time
+end
+
+function _table_header(io, r::Report)
+    has_instr, show_time = _columns(r)
+    header = "| | Benchmark |" * (has_instr ? " Instructions |" : "") *
+        (show_time ? " Time |" : "") * " Memory |"
+    println(io, header)
+    ncols = 1 + has_instr + show_time   # metric columns incl. Memory
+    println(io, "|:--:|:--|", ":--|"^ncols)
+    return
+end
+
+function _table_row(io, r::Report, m::Measurement)
+    has_instr, show_time = _columns(r)
+    cells = String[]
+    has_instr && push!(cells, _instr_cell(m))
+    show_time && push!(cells, _time_cell(m))
+    push!(cells, _mem_cell(m))
+    println(io, "| $(_icon(m)) | `$(_safekey(m.key))` | ", join(cells, " | "), " |")
+    return
+end
+
 # Single table of everything that moved: regressions (worst first), then memory
 # trade-offs, then improvements. One icon per row. Only capped as a last resort
 # against the comment size limit, in which case `overflow_where` says where the
@@ -129,10 +165,9 @@ function _changes_table(io, r::Report, max_rows::Int, overflow_where::String)
     rows = vcat(regs, trds, imps)
 
     shown = rows[1:min(max_rows, length(rows))]
-    println(io, "| | Benchmark | Time | Memory |")
-    println(io, "|:--:|:--|:--|:--|")
+    _table_header(io, r)
     for m in shown
-        println(io, "| $(_icon(m)) | `$(_safekey(m.key))` | $(_time_cell(m)) | $(_mem_cell(m)) |")
+        _table_row(io, r, m)
     end
     hidden = length(rows) - length(shown)
     hidden > 0 && println(io, "\n<sub>… and $(hidden) more change$(_s(hidden)) $(overflow_where).</sub>")
@@ -147,10 +182,9 @@ function _full_details(io, r::Report)
     isempty(rows) && return
     n = length(rows)
     println(io, "\n<details><summary>Full results ($(n) benchmark$(_s(n)))</summary>\n")
-    println(io, "| | Benchmark | Time | Memory |")
-    println(io, "|:--:|:--|:--|:--|")
+    _table_header(io, r)
     for m in sort(rows; by = x -> x.key)
-        println(io, "| $(_icon(m)) | `$(_safekey(m.key))` | $(_time_cell(m)) | $(_mem_cell(m)) |")
+        _table_row(io, r, m)
     end
     println(io, "\n</details>")
     return
@@ -179,16 +213,23 @@ function _uncompared(io, r::Report)
     tot = length(a) + length(d) + length(u)
     println(io, "\n<details><summary>Uncompared benchmarks ($(tot))</summary>\n")
     for m in sort(a; by = x -> x.key)
-        println(io, "- 🆕 `$(_safekey(m.key))` — added in target ($(prettytime(m.target.time)))")
+        println(io, "- 🆕 `$(_safekey(m.key))` — added in target ($(_solo_value(r, m.target)))")
     end
     for m in sort(d; by = x -> x.key)
-        println(io, "- 🗑️ `$(_safekey(m.key))` — removed from target (was $(prettytime(m.baseline.time)))")
+        println(io, "- 🗑️ `$(_safekey(m.key))` — removed from target (was $(_solo_value(r, m.baseline)))")
     end
     for m in sort(u; by = x -> x.key)
         println(io, "- ⚠️ `$(_safekey(m.key))` — ran in non-overlapping passes, not compared")
     end
     println(io, "\n</details>")
     return
+end
+
+# The one-number description of a benchmark that exists on only one side:
+# instructions when time is not meaningful (callgrind), wall time otherwise.
+function _solo_value(r::Report, e::Estimate)
+    (!time_judged(r.meta) && hasinstr(e)) && return prettycount(e.instructions) * " insns"
+    return prettytime(e.time)
 end
 
 # "baseline `389ecb7` (master)" — the ref in parentheses only earns its place when
@@ -245,9 +286,17 @@ function _footer(r::Report)
     push!(parts, _revision_part("target", m.target_sha, m.target_ref, repo))
     push!(parts, "Julia $(_safetext(m.julia_version))")
     isempty(m.cpu) || push!(parts, _safetext(m.cpu))
+    isempty(m.backend) || push!(parts, "$(m.backend) backend")
     push!(parts, "min estimator")
-    push!(parts, "tol $(_pct0(m.time_tolerance))/$(_pct0(m.memory_tolerance))")
-    push!(parts, "floor $(prettytime(m.time_floor_ns))")
+    if m.backend in ("perf", "callgrind")
+        tguard = time_judged(m) ? " / $(_pct0(max(m.time_tolerance, m.time_guard_tolerance))) time guard" : ""
+        push!(parts, "tol $(_pct1(m.instr_tolerance)) instr$(tguard) / $(_pct0(m.memory_tolerance)) mem")
+        push!(parts, "floor $(prettycount(m.instr_floor)) insns")
+    else
+        push!(parts, "tol $(_pct0(m.time_tolerance))/$(_pct0(m.memory_tolerance))")
+        push!(parts, "floor $(prettytime(m.time_floor_ns))")
+    end
+    time_judged(m) || push!(parts, "wall time not judged (simulated run)")
     m.nruns > 1 && push!(parts, "$(m.nruns)× runs")
     let u = _safeurl(m.run_url)
         isempty(u) || push!(parts, "[run]($(u))")
@@ -262,6 +311,12 @@ function _time_cell(m::Measurement)
     (m.baseline === nothing || m.target === nothing) && return "—"
     b, t = m.baseline.time, m.target.time
     return "$(prettytime(b)) → $(prettytime(t)) ($(_signed_pct(m.time_ratio)))"
+end
+
+function _instr_cell(m::Measurement)
+    (m.baseline === nothing || m.target === nothing || m.instr_ratio === nothing) && return "—"
+    b, t = m.baseline.instructions, m.target.instructions
+    return "$(prettycount(b)) → $(prettycount(t)) ($(_signed_pct1(m.instr_ratio)))"
 end
 
 function _mem_cell(m::Measurement)
@@ -281,9 +336,11 @@ end
 # Sort key: how far the change is from no-change, biased toward the metric that
 # triggered the verdict.
 function _sortkey(m::Measurement)
-    t = (m.time_ratio === nothing || !isfinite(m.time_ratio)) ? 1.0 : m.time_ratio
-    mem = (m.mem_ratio === nothing || !isfinite(m.mem_ratio)) ? 1.0 : m.mem_ratio
-    return m.reason === :memory ? abs(mem - 1) : abs(t - 1)
+    dist(r) = (r === nothing || !isfinite(r)) ? 0.0 : abs(r - 1)
+    return m.reason === :memory ? dist(m.mem_ratio) :
+        m.reason === :instructions ? dist(m.instr_ratio) :
+        m.reason === :multiple ? max(dist(m.instr_ratio), dist(m.time_ratio), dist(m.mem_ratio)) :
+        m.instr_ratio !== nothing && m.reason !== :time ? dist(m.instr_ratio) : dist(m.time_ratio)
 end
 
 # --- formatting ------------------------------------------------------------
@@ -320,7 +377,30 @@ function _signed_pct(ratio)
     return @sprintf("%s%.0f%%", s, abs(pct))
 end
 
+# Instruction changes are judged at ~1%, so one decimal keeps sub-percent
+# changes visible instead of rounding to +0%.
+function _signed_pct1(ratio)
+    ratio === nothing && return "—"
+    pct = (ratio - 1) * 100
+    s = pct >= 0 ? "+" : "−"
+    return abs(pct) < 10 ? @sprintf("%s%.1f%%", s, abs(pct)) : @sprintf("%s%.0f%%", s, abs(pct))
+end
+
+function prettycount(x::Real)
+    isfinite(x) || return "—"
+    if x >= 1e9
+        return @sprintf("%.3g G", x / 1e9)
+    elseif x >= 1e6
+        return @sprintf("%.3g M", x / 1e6)
+    elseif x >= 1e3
+        return @sprintf("%.3g k", x / 1e3)
+    else
+        return @sprintf("%.0f", x)
+    end
+end
+
 _pct0(x) = @sprintf("%.0f%%", x * 100)
+_pct1(x) = x * 100 == round(x * 100) ? @sprintf("%.0f%%", x * 100) : @sprintf("%.1f%%", x * 100)
 _s(n) = n == 1 ? "" : "s"
 
 # Benchmark keys are author-controlled text embedded in inline code and tables.

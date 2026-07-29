@@ -5,12 +5,22 @@ difference as a pull request comment. The intended use is a PR performance check
 benchmark the base branch and the PR, and point out the benchmarks that changed.
 
 It expects a `benchmark/benchmarks.jl` that defines `const SUITE = BenchmarkGroup()`
-— the same layout PkgBenchmark and AirspeedVelocity use, so an existing suite
-works unchanged. For each revision it checks the source out into a temporary `git
-worktree`, runs the suite in a separate Julia process, and takes the minimum time
-per benchmark with BenchmarkTools. The benchmarking itself uses only BenchmarkTools
-(plus JSON, TOML, and standard libraries) rather than PkgBenchmark, which is what
-lets it interleave the two revisions across repeated runs (see below).
+using [Odometer](https://github.com/KristofferC/Odometer.jl) — the same layout
+(and macro surface) as PkgBenchmark/BenchmarkTools suites, so an existing suite
+usually only changes `using BenchmarkTools` to `using Odometer`. For each
+revision Tachometer checks the source out into a temporary `git worktree`, runs
+the suite in a separate Julia process, and takes the per-benchmark minimum.
+
+The headline metric is the **instruction count**, not wall time. Odometer
+measures it with hardware performance counters (`perf` backend) or, on
+GitHub-hosted runners — which expose no PMU — under valgrind's callgrind
+simulation, where a run is *deterministic*: the same code produces the same
+count, bit for bit, on any runner. That is what lets the regression gate sit at
+1% instead of the 5%+ that shared-runner wall time needs, with essentially no
+false positives. Wall time and allocations are still measured; on `perf` runs
+time keeps its own (looser) gate so a cache-effect slowdown with a flat
+instruction count is still caught, and under callgrind simulated time is not
+judged at all.
 
 ## The comment
 
@@ -237,12 +247,14 @@ commits have been tracked on the new runner.
 | `baseline` | merge-base of the PR | Revision to compare against |
 | `target` | PR head / working tree | Revision under test |
 | `script` | `benchmark/benchmarks.jl` | Suite entrypoint, defines `SUITE` |
+| `backend` | `auto` | `perf` (hardware counters), `callgrind` (simulation — any runner), `time`; `auto` picks the best available |
 | `time-tolerance` | `0.05` | Relative time change to report |
 | `memory-tolerance` | `0.05` | Relative memory change to report |
+| `instr-tolerance` | `0.01` | Relative instruction-count change to report |
 | `time-floor` | `1us` | Absolute time change also required |
 | `memory-floor` | `0` | Absolute byte change also required |
+| `instr-floor` | `1000` | Absolute instruction change also required |
 | `nruns` | `1` | Interleaved runs; all must agree |
-| `tune` | `auto` | `auto`: use `tune.json`, else `tune!`; `never`: declared parameters only; `always`: force `tune!` |
 | `verbose` | `true` | Stream each benchmark's progress to the job log as it runs |
 | `fail-on-regression` | `false` | Fail the job on a regression |
 | `release-baseline` | `true` | On a version bump, compare against the last release tag |

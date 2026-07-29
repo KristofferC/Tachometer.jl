@@ -25,30 +25,44 @@ inputs:
   target:
     description: "Target git ref. Defaults to the PR head SHA."
     default: ""
+  backend:
+    description: >-
+      Measurement backend: `auto` (hardware counters if the runner has a PMU,
+      else callgrind if valgrind is installed, else time), `perf`, `callgrind`,
+      or `time`. GitHub-hosted runners have no PMU, so `auto` there means
+      callgrind: deterministic simulated instruction counts judged at
+      `instr-tolerance`, immune to runner noise, at the cost of a slower
+      (simulated) run.
+    default: "auto"
   time-tolerance:
     description: "Relative time change (0.05 = 5%) needed to flag a regression."
     default: "0.05"
   memory-tolerance:
     description: "Relative memory change (0.05 = 5%) needed to flag a regression."
     default: "0.05"
+  instr-tolerance:
+    description: "Relative instruction-count change (0.01 = 1%) needed to flag a regression."
+    default: "0.01"
+  time-guard-tolerance:
+    description: >-
+      Time tolerance applied when instructions are the judged metric: a loose
+      guard against slowdowns instruction counts cannot see (cache effects).
+    default: "0.25"
   time-floor:
     description: "Absolute time change a regression must also clear, e.g. 1us, 500ns, 2ms."
     default: "1us"
   memory-floor:
     description: "Absolute memory change (bytes) a regression must also clear."
     default: "0"
+  instr-floor:
+    description: "Absolute instruction-count change a regression must also clear."
+    default: "1000"
   nruns:
     description: "Interleaved baseline/target passes. >1 requires every pass to agree."
     default: "1"
   threads:
     description: "JULIA_NUM_THREADS for the benchmark subprocesses."
     default: "1"
-  tune:
-    description: >-
-      Benchmark parameter tuning: `auto` loads a committed tune.json, else runs
-      `tune!`; `never` skips tuning and uses the parameters declared in the
-      suite; `always` forces `tune!`.
-    default: "auto"
   verbose:
     description: >-
       Name each benchmark as it runs, streamed to the job log while the suite
@@ -94,6 +108,18 @@ runs:
 
     - uses: julia-actions/cache@v2
 
+    # Callgrind needs a valgrind binary; install one unless the user pinned
+    # backend to something else. (Harmless when `auto` ends up picking perf.)
+    - name: Install valgrind
+      if: runner.os == 'Linux' && (inputs.backend == 'auto' || inputs.backend == 'callgrind')
+      shell: bash
+      run: |
+        set -euo pipefail
+        command -v valgrind >/dev/null 2>&1 || {
+          sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
+        }
+        valgrind --version
+
     - name: Resolve revisions
       id: refs
       shell: bash
@@ -135,13 +161,16 @@ runs:
         TACHOMETER_SCRIPT: ${{ inputs.script }}
         TACHOMETER_BASELINE: ${{ steps.refs.outputs.baseline }}
         TACHOMETER_TARGET: ${{ steps.refs.outputs.target }}
+        TACHOMETER_BACKEND: ${{ inputs.backend }}
         TACHOMETER_TIME_TOLERANCE: ${{ inputs.time-tolerance }}
         TACHOMETER_MEMORY_TOLERANCE: ${{ inputs.memory-tolerance }}
+        TACHOMETER_INSTR_TOLERANCE: ${{ inputs.instr-tolerance }}
+        TACHOMETER_TIME_GUARD_TOLERANCE: ${{ inputs.time-guard-tolerance }}
         TACHOMETER_TIME_FLOOR: ${{ inputs.time-floor }}
         TACHOMETER_MEMORY_FLOOR: ${{ inputs.memory-floor }}
+        TACHOMETER_INSTR_FLOOR: ${{ inputs.instr-floor }}
         TACHOMETER_NRUNS: ${{ inputs.nruns }}
         TACHOMETER_THREADS: ${{ inputs.threads }}
-        TACHOMETER_TUNE: ${{ inputs.tune }}
         TACHOMETER_VERBOSE: ${{ inputs.verbose }}
         TACHOMETER_RELEASE_BASELINE: ${{ inputs.release-baseline }}
         TACHOMETER_MARKER: ${{ inputs.marker }}
@@ -154,6 +183,9 @@ runs:
         julia --color=yes -e '
           using Pkg
           Pkg.activate(; temp = true)
+          # Odometer is not registered yet; fetch it by URL so Tachometer(dev)
+          # can resolve. Drop this line once Odometer is in General.
+          Pkg.add(url = "https://github.com/KristofferC/Odometer.jl")
           Pkg.develop(PackageSpec(path = ENV["TACHO_PATH"]))
           Pkg.instantiate()
           using Tachometer

@@ -1,19 +1,27 @@
 # Running a benchmark suite for one revision of a package, in isolation.
 #
-# This does not go through PkgBenchmark: keeping the git and subprocess handling
-# here means the caller's working tree and environment are never mutated, and
-# baseline/target runs can be interleaved for the paired reruns in judge.jl.
+# Keeping the git and subprocess handling here means the caller's working tree
+# and environment are never mutated, and baseline/target runs can be
+# interleaved for the paired reruns in judge.jl.
 #
 # For each revision:
 #   1. check the source out at that revision into a throwaway `git worktree`
 #      (or use the live working tree for the `:workingtree` sentinel),
-#   2. build a fresh temporary project that `dev`s the package from that source
-#      plus the suite's own dependencies (copied, never mutated),
-#   3. run `benchmark/benchmarks.jl` (which must define `const SUITE`) in a
-#      separate process and serialise the `BenchmarkGroup` to JSON,
-#   4. load it back and reduce it to per-benchmark `Estimate`s.
+#   2. *prepare* (native): build a fresh temporary project that `dev`s the
+#      package from that source plus Odometer and the suite's own dependencies
+#      (copied, never mutated), instantiate and precompile it,
+#   3. *run*: execute `benchmark/benchmarks.jl` (which must define
+#      `const SUITE = BenchmarkGroup()`, using Odometer) in a separate process —
+#      wrapped in `valgrind --tool=callgrind` for the callgrind backend — and
+#      save the results as JSON,
+#   4. load them back and reduce to per-benchmark `Estimate`s (minimum over
+#      samples, instructions included when the backend counts them).
+#
+# The prepare/run split exists for callgrind: Pkg operations and precompilation
+# must happen natively (precompiled for the CPU target valgrind supports), so
+# the simulated process only loads caches and measures.
 
-using BenchmarkTools: BenchmarkTools, BenchmarkGroup, leaves
+using Odometer: Odometer
 using SHA: sha256
 
 """
@@ -30,8 +38,41 @@ struct RevisionRun
     dirty::Bool
     estimates::Dict{String, Estimate}
     script_hash::String
+    backend::String         # backend the results were measured with ("" when unknown)
     ok::Bool
     log::String
+end
+
+RevisionRun(sha, dirty, estimates, script_hash, ok::Bool, log) =
+    RevisionRun(sha, dirty, estimates, script_hash, "", ok, log)
+
+"""
+    resolve_backend(backend; valgrind = "valgrind") -> Symbol
+
+Resolve `:auto` to a concrete measurement backend for this machine — `:perf`
+when hardware counters are available, else `:callgrind` when a valgrind binary
+is on the PATH, else `:time` — and validate an explicitly requested backend,
+erroring (never silently downgrading) when it cannot run.
+"""
+function resolve_backend(backend::Symbol; valgrind::AbstractString = "valgrind")
+    if backend === :auto
+        Odometer.perf_available() && return :perf
+        Sys.which(valgrind) === nothing || return :callgrind
+        return :time
+    elseif backend === :perf
+        Odometer.perf_available() ||
+            error("backend :perf requested but hardware performance counters are unavailable " *
+                "(no PMU — e.g. a hosted CI runner — or perf_event_paranoid too restrictive); " *
+                "use backend=:callgrind there instead")
+        return :perf
+    elseif backend === :callgrind
+        Sys.which(valgrind) === nothing &&
+            error("backend :callgrind requested but `$valgrind` was not found on the PATH")
+        return :callgrind
+    elseif backend === :time
+        return :time
+    end
+    throw(ArgumentError("unknown backend $(repr(backend)) (expected :auto, :perf, :callgrind or :time)"))
 end
 
 git(repo, args...) = readchomp(`git -C $repo $(collect(args))`)
@@ -130,32 +171,30 @@ function _script_hash(dir::AbstractString, script::AbstractString)
 end
 
 """
-    run_revision(repo, rev, script; env, threads, tune, verbose, stream, io) -> RevisionRun
+    run_revision(repo, rev, script; backend=:time, env, threads, verbose, stream, io) -> RevisionRun
 
-Run the suite for one revision. Never mutates `repo`.
+Run the suite for one revision. Never mutates `repo`. `backend` must be a
+concrete backend (`:perf`, `:callgrind`, `:time` — resolve `:auto` first with
+[`resolve_backend`](@ref)).
 
-`tune` controls benchmark parameter tuning: `:auto` (default) loads a committed
-`tune.json` if present and otherwise calls `tune!` (skipped when every leaf
-declares `evals`); `:never` skips tuning entirely and runs with the parameters
-declared in the suite; `:always` forces `tune!`, ignoring any `tune.json`.
-
-`verbose` (default `true`) is passed to `BenchmarkTools.run`, so the subprocess
-names each benchmark as it executes it. `stream` (default: follows `verbose`)
-forwards the subprocess output to `io` line by line *while it runs*, so a long
-suite can be watched as it progresses instead of going quiet for minutes. The
-output is captured either way; the captured tail is what a failed run reports.
+`verbose` (default `true`) makes the subprocess name each benchmark as it
+executes it. `stream` (default: follows `verbose`) forwards the subprocess
+output to `io` line by line *while it runs*, so a long suite can be watched as
+it progresses instead of going quiet for minutes. The output is captured either
+way; the captured tail is what a failed run reports.
 """
 function run_revision(
         repo::AbstractString, rev, script::AbstractString;
+        backend::Symbol = :time,
+        valgrind::AbstractString = "valgrind",
         env::AbstractDict = Dict{String, String}(),
         threads::Int = 1,
-        tune::Symbol = :auto,
         verbose::Bool = true,
         stream::Bool = verbose,
         io::IO = stdout,
     )
-    tune in (:auto, :never, :always) ||
-        throw(ArgumentError("tune must be :auto, :never or :always, got $(repr(tune))"))
+    backend in (:perf, :callgrind, :time) ||
+        throw(ArgumentError("backend must be concrete (:perf, :callgrind or :time); resolve :auto first"))
     # Any failure (bad ref, worktree/subprocess/deserialisation error) becomes a
     # clean `ok = false` run so the caller can report a yellow state instead of
     # crashing. Only the measured SHA is trusted, and the worktree is checked out
@@ -170,7 +209,8 @@ function run_revision(
 
     worktree = nothing
     outfile = ""
-    driver = ""
+    tmpfiles = String[]
+    envdir = ""
     try
         srcdir = if rev === WORKINGTREE
             repo
@@ -185,12 +225,35 @@ function run_revision(
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
                 "benchmark script `$script` not found at revision $(_short(sha))")
 
+        prefix = "[$(_short(sha))] "
+        subenv = _subprocess_env(env, threads)
+
+        # Phase 1 (native): build the ephemeral project and precompile it. For
+        # callgrind, precompile for the CPU target valgrind's virtual CPU
+        # supports, so the simulated process loads caches instead of compiling.
+        envdir = mktempdir(; prefix = "tachometer_env_")
+        prep = _write_prepare_driver(srcdir, script, envdir)
+        push!(tmpfiles, prep)
+        prepenv = copy(subenv)
+        backend === :callgrind && (prepenv["JULIA_CPU_TARGET"] = Odometer.CALLGRIND_CPU_TARGET)
+        proc = _run_julia(setenv(_julia_cmd(prep), _envvec(prepenv)); stream, io, prefix)
+        success(proc.code) ||
+            return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
+                "environment preparation failed\n" * _tail(proc.log))
+
+        # Phase 2: run the suite (under callgrind when asked).
         outfile = tempname() * ".json"
-        driver = _write_driver(srcdir, script, outfile, tune, verbose)
-        # Each streamed line is tagged with the revision being measured, so the
-        # interleaved baseline/target passes of a `compare` stay tellable apart.
-        proc = _run_julia(driver, _subprocess_env(env, threads);
-            stream, io, prefix = "[$(_short(sha))] ")
+        driver = _write_run_driver(srcdir, script, envdir, outfile, backend, verbose)
+        push!(tmpfiles, driver)
+        # The environment is applied to the *inner* julia command, so the extra
+        # variables `callgrind_cmd` adds on top survive.
+        cmd = if backend === :callgrind
+            # A single GC thread keeps the simulated process deterministic and cheap.
+            Odometer.callgrind_cmd(setenv(_julia_cmd(driver, `--gcthreads=1`), _envvec(subenv)); valgrind)
+        else
+            setenv(_julia_cmd(driver), _envvec(subenv))
+        end
+        proc = _run_julia(cmd; stream, io, prefix)
         if !success(proc.code)
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false, _tail(proc.log))
         end
@@ -198,14 +261,18 @@ function run_revision(
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
                 "subprocess produced no results file\n" * _tail(proc.log))
 
-        estimates = _load_estimates(outfile)
-        return RevisionRun(sha, dirty, estimates, script_hash, true, _tail(proc.log))
+        estimates, run_backend = _load_estimates(outfile)
+        run_backend == string(backend) ||
+            return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
+                "requested backend `$backend` but results were measured with `$run_backend`")
+        return RevisionRun(sha, dirty, estimates, script_hash, run_backend, true, _tail(proc.log))
     catch e
         return RevisionRun(sha, dirty, Dict{String, Estimate}(), "", false,
             "error while benchmarking $(_short(sha)): $(sprint(showerror, e))")
     finally
-        isempty(driver) || rm(driver; force = true)
+        foreach(f -> rm(f; force = true), tmpfiles)
         isempty(outfile) || rm(outfile; force = true)
+        isempty(envdir) || rm(envdir; force = true, recursive = true)
         if worktree !== nothing
             try
                 run(`git -C $repo worktree remove --force $worktree`)
@@ -232,74 +299,71 @@ function _subprocess_env(env, threads)
     return e
 end
 
-# The subprocess driver. It builds an ephemeral project (so the caller's repo is
-# untouched), dev-installs the package from `srcdir`, runs the suite and saves it.
-function _write_driver(srcdir, script, outfile, tune, verbose)
+# The Odometer source to `dev` into the ephemeral suite environment: the same
+# copy this process loaded, so parent and subprocess agree on the format.
+_odometer_src() = dirname(dirname(pathof(Odometer)))
+
+# Phase-1 driver: build the ephemeral project (so the caller's repo is
+# untouched), dev-install the package and Odometer, instantiate + precompile.
+function _write_prepare_driver(srcdir, script, envdir)
     benchdir = dirname(joinpath(srcdir, script))
-    scriptpath = joinpath(srcdir, script)
     code = """
     using Pkg
     const _SRC = $(repr(srcdir))
     const _BENCHDIR = $(repr(benchdir))
-    const _SCRIPT = $(repr(scriptpath))
-    const _OUT = $(repr(outfile))
-    const _TUNE = $(repr(tune))
-    const _VERBOSE = $(repr(verbose))
+    const _ENV = $(repr(envdir))
+    const _ODOMETER = $(repr(_odometer_src()))
 
-    env = mktempdir(; prefix = "tachometer_env_")
     # Seed the ephemeral environment from the suite's own Project.toml when it
     # has one (to get suite-only deps like DataFrames), copied so we never write
     # into the source tree. Otherwise start from an empty project.
     for f in ("Project.toml", "Manifest.toml", "JuliaProject.toml", "JuliaManifest.toml")
         p = joinpath(_BENCHDIR, f)
-        isfile(p) && cp(p, joinpath(env, f); force = true)
+        isfile(p) && cp(p, joinpath(_ENV, f); force = true)
     end
-    Pkg.activate(env; io = devnull)
-    # Point the package at *this* revision's source and make sure BenchmarkTools
-    # is available regardless of what the suite project declared.
-    Pkg.develop(PackageSpec(path = _SRC); io = devnull)
-    try
-        Pkg.add("BenchmarkTools"; io = devnull, preserve = Pkg.PRESERVE_ALL)
-    catch
-        Pkg.add("BenchmarkTools"; io = devnull)
-    end
+    Pkg.activate(_ENV; io = devnull)
+    # Point the package at *this* revision's source and make sure Odometer is
+    # available regardless of what the suite project declared.
+    Pkg.develop([PackageSpec(path = _SRC), PackageSpec(path = _ODOMETER)]; io = devnull)
     Pkg.instantiate(; io = devnull)
-
-    using BenchmarkTools
-    Base.include(Main, _SCRIPT)
-    isdefined(Main, :SUITE) || error("benchmark script did not define `SUITE`")
-    suite = Main.SUITE::BenchmarkGroup
-
-    # `:never` runs with the parameters declared in the suite, untouched.
-    paramsfile = joinpath(_BENCHDIR, "tune.json")
-    if _TUNE === :always
-        tune!(suite)
-    elseif _TUNE === :auto && isfile(paramsfile)
-        loadparams!(suite, BenchmarkTools.load(paramsfile)[1], :evals, :samples)
-    elseif _TUNE === :auto && any(((_, b),) -> !b.params.evals_set, BenchmarkTools.leaves(suite))
-        # Skipped when every leaf declares `evals`: tuning would be a per-leaf no-op,
-        # but the group-level `tune!` still runs a ~0.5 s gcscrub per subgroup.
-        tune!(suite)
-    end
-
-    results = run(suite; verbose = _VERBOSE)
-    BenchmarkTools.save(_OUT, results)
+    Pkg.precompile(; io = devnull)
     """
     path = tempname() * ".jl"
     write(path, code)
     return path
 end
 
-function _run_julia(driver, env; stream::Bool = false, io::IO = stdout, prefix::AbstractString = "")
-    # Use the full julia_cmd so a custom sysimage (-J) and similar flags survive.
-    # The driver activates its own temp project, so no --project here.
-    julia = Base.julia_cmd()
+# Phase-2 driver: run the suite in the prepared environment and save results.
+function _write_run_driver(srcdir, script, envdir, outfile, backend, verbose)
+    scriptpath = joinpath(srcdir, script)
+    code = """
+    using Pkg
+    Pkg.activate($(repr(envdir)); io = devnull)
+    using Odometer
+    Base.include(Main, $(repr(scriptpath)))
+    isdefined(Main, :SUITE) || error("benchmark script did not define `SUITE`")
+    suite = Main.SUITE::BenchmarkGroup
+    results = run(suite; backend = $(repr(backend)), verbose = $(repr(verbose)))
+    Odometer.save($(repr(outfile)), results)
+    """
+    path = tempname() * ".jl"
+    write(path, code)
+    return path
+end
+
+# Use the full julia_cmd so a custom sysimage (-J) and similar flags survive.
+# The drivers activate their own temp project, so no --project here.
+_julia_cmd(driver, extra::Cmd = ``) = `$(Base.julia_cmd()) --startup-file=no $extra $driver`
+
+_envvec(env) = String[string(k) * "=" * string(v) for (k, v) in env]
+
+function _run_julia(cmd::Base.AbstractCmd; stream::Bool = false, io::IO = stdout, prefix::AbstractString = "")
     buf = IOBuffer()
     # stdout and stderr share one pipe so the log keeps them in the order they
     # were written, and a reader task drains it as the subprocess writes: it must
     # never fill, or the subprocess would block on a full pipe and hang.
     out = Pipe()
-    cmd = pipeline(setenv(`$julia --startup-file=no $driver`, env); stdout = out, stderr = out)
+    cmd = pipeline(cmd; stdout = out, stderr = out)
     proc = run(cmd; wait = false)
     close(out.in)   # the parent holds no write end, so the reader sees EOF at exit
     reader = @async try
@@ -321,23 +385,27 @@ end
 
 success(code::Base.Process) = code.exitcode == 0
 
+# Reduce saved Odometer results to per-benchmark Estimates (minimum over
+# samples — robust against positive within-trial noise; Odometer already
+# excludes compile-contaminated and unreliable samples when clean ones exist).
+# Also returns the backend the results were measured with (uniform across
+# leaves by construction — one `run(suite)` — so the last one wins).
 function _load_estimates(file)
-    group = BenchmarkTools.load(file)[1]::BenchmarkGroup
-    est = minimum(group)   # robust against positive within-trial noise
+    group = Odometer.load(file)
     out = Dict{String, Estimate}()
-    for (ids, trial) in leaves(est)
+    backend = ""
+    for (ids, trial) in Odometer.leaves(group)
         key = join(_keypart.(ids), "/")
-        out[key] = Estimate(
-            Float64(BenchmarkTools.time(trial)),
-            Float64(BenchmarkTools.memory(trial)),
-            Float64(BenchmarkTools.allocs(trial)),
-        )
+        m = minimum(trial)
+        out[key] = Estimate(m.time, m.bytes, m.allocs, m.instructions)
+        backend = string(trial.provenance.backend)
     end
-    return out
+    return out, backend
 end
 
-# BenchmarkGroup keys are often tuples like `("spatial-dim", 2)`; render those as
+# Group keys are often tuples like `("spatial-dim", 2)`; render those as
 # `spatial-dim=2` instead of the raw tuple `repr` so the report reads cleanly.
+# (Odometer.keystring does the same; keys loaded from JSON are already strings.)
 _keypart(x) = x isa Tuple ? join(string.(x), "=") : string(x)
 
 function _tail(s::AbstractString; n = 40, chars = 4000)
