@@ -266,7 +266,9 @@ function _write_driver(srcdir, script, outfile, retune, verbose)
     paramsfile = joinpath(_BENCHDIR, "tune.json")
     if !_RETUNE && isfile(paramsfile)
         loadparams!(suite, BenchmarkTools.load(paramsfile)[1], :evals, :samples)
-    else
+    elseif any(((_, b),) -> !b.params.evals_set, BenchmarkTools.leaves(suite))
+        # Skipped when every leaf declares `evals`: tuning would be a per-leaf no-op,
+        # but the group-level `tune!` still runs a ~0.5 s gcscrub per subgroup.
         tune!(suite)
     end
 
