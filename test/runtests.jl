@@ -7,6 +7,7 @@ using Tachometer: Estimate, Measurement, Meta, Report, RevisionRun, NoiseModel,
     effective_time_tolerance, prettytime, prettymemory, _signed_pct,
     regressions, improvements, invariants, tradeoffs, added, removed, suppressed, compared,
     project_version, last_release_tag, _release_baseline, WORKINGTREE, _write_driver, _run_julia,
+    run_revision,
     load_index, load_shard, load_all_records, _releases, _shard_name, write_dashboard,
     report_to_dict, report_from_dict
 
@@ -128,12 +129,19 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         mkpath(joinpath(dir, "benchmark"))
         write(joinpath(dir, "benchmark", "benchmarks.jl"), "const SUITE = nothing\n")
         for v in (true, false)
-            path = _write_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "out.json"), false, v)
+            path = _write_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "out.json"), :auto, v)
             code = read(path, String)
             @test occursin("const _VERBOSE = $(v)", code)
             @test occursin("run(suite; verbose = _VERBOSE)", code)
             rm(path; force = true)
         end
+        # `tune` is baked into the driver, and rejected early when invalid.
+        for t in (:auto, :never, :always)
+            path = _write_driver(dir, "benchmark/benchmarks.jl", joinpath(dir, "out.json"), t, true)
+            @test occursin("const _TUNE = $(repr(t))", read(path, String))
+            rm(path; force = true)
+        end
+        @test_throws ArgumentError run_revision(dir, "HEAD", "benchmark/benchmarks.jl"; tune = :sometimes)
     end
 
     @testset "streamed subprocess output" begin

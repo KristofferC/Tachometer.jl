@@ -43,6 +43,12 @@ inputs:
   threads:
     description: "JULIA_NUM_THREADS for the benchmark subprocesses."
     default: "1"
+  tune:
+    description: >-
+      Benchmark parameter tuning: `auto` loads a committed tune.json, else runs
+      `tune!`; `never` skips tuning and uses the parameters declared in the
+      suite; `always` forces `tune!`.
+    default: "auto"
   verbose:
     description: >-
       Name each benchmark as it runs, streamed to the job log while the suite
@@ -135,6 +141,7 @@ runs:
         TACHOMETER_MEMORY_FLOOR: ${{ inputs.memory-floor }}
         TACHOMETER_NRUNS: ${{ inputs.nruns }}
         TACHOMETER_THREADS: ${{ inputs.threads }}
+        TACHOMETER_TUNE: ${{ inputs.tune }}
         TACHOMETER_VERBOSE: ${{ inputs.verbose }}
         TACHOMETER_RELEASE_BASELINE: ${{ inputs.release-baseline }}
         TACHOMETER_MARKER: ${{ inputs.marker }}

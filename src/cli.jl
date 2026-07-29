@@ -35,7 +35,7 @@ function main(; io = stdout)
         memory_floor = _envf("TACHOMETER_MEMORY_FLOOR", 0.0),
         nruns = _envi("TACHOMETER_NRUNS", 1),
         threads = _envi("TACHOMETER_THREADS", 1),
-        retune = _envb("TACHOMETER_RETUNE", false),
+        tune = Symbol(_envs("TACHOMETER_TUNE", "auto")),
         verbose,
         stream = _envb("TACHOMETER_STREAM", verbose),
         io,
@@ -87,7 +87,7 @@ function _main_record(io)
     rec = record_run(repo;
         script = _env("TACHOMETER_SCRIPT", "benchmark/benchmarks.jl"),
         threads = _envi("TACHOMETER_THREADS", 1),
-        retune = _envb("TACHOMETER_RETUNE", false),
+        tune = Symbol(_envs("TACHOMETER_TUNE", "auto")),
         verbose,
         stream = _envb("TACHOMETER_STREAM", verbose),
         io,
@@ -117,6 +117,7 @@ function _main_publish(io)
 end
 
 _env(name, default) = get(ENV, name, default)
+_envs(name, default) = haskey(ENV, name) && !isempty(ENV[name]) ? ENV[name] : default
 _emptyto_nothing(s) = isempty(s) ? nothing : s
 _envf(name, default) = haskey(ENV, name) && !isempty(ENV[name]) ? parse(Float64, ENV[name]) : default
 _envi(name, default) = haskey(ENV, name) && !isempty(ENV[name]) ? parse(Int, ENV[name]) : default

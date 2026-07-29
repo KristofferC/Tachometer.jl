@@ -20,12 +20,16 @@ using Statistics: median
     compare(repo; baseline, target=WORKINGTREE, script="benchmark/benchmarks.jl",
             time_tolerance=0.05, memory_tolerance=0.05,
             time_floor="1us", memory_floor=0, nruns=1,
-            env=Dict(), threads=1, retune=false, verbose=true, stream=verbose,
+            env=Dict(), threads=1, tune=:auto, verbose=true, stream=verbose,
             run_url="", marker="tachometer") -> Report
 
 Benchmark `repo` (a path to a git working copy of the package) at two revisions
 and report the performance difference. `baseline`/`target` are git refs, or the
 [`WORKINGTREE`](@ref) sentinel for the live working tree.
+
+`tune` controls benchmark parameter tuning: `:auto` (default) loads a committed
+`tune.json` if present and otherwise calls `tune!`; `:never` skips tuning
+entirely; `:always` forces `tune!`. See [`run_revision`](@ref).
 
 `verbose` (default `true`) makes each benchmark subprocess name the benchmarks as
 it runs them, and `stream` (following `verbose`) forwards that output to `io` as
@@ -44,7 +48,7 @@ function compare(
         nruns::Integer = 1,
         env::AbstractDict = Dict{String, String}(),
         threads::Int = 1,
-        retune::Bool = false,
+        tune::Symbol = :auto,
         verbose::Bool = true,
         stream::Bool = verbose,
         io::IO = stdout,
@@ -85,11 +89,11 @@ function compare(
         first_baseline = isodd(i)
         stream && nruns > 1 && println(io, "[tachometer] pass $(i)/$(nruns)")
         if first_baseline
-            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune, verbose, stream, io))
-            push!(target_runs, run_revision(repo, target, script; env, threads, retune, verbose, stream, io))
+            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, tune, verbose, stream, io))
+            push!(target_runs, run_revision(repo, target, script; env, threads, tune, verbose, stream, io))
         else
-            push!(target_runs, run_revision(repo, target, script; env, threads, retune, verbose, stream, io))
-            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, retune, verbose, stream, io))
+            push!(target_runs, run_revision(repo, target, script; env, threads, tune, verbose, stream, io))
+            push!(baseline_runs, run_revision(repo, baseline, script; env, threads, tune, verbose, stream, io))
         end
     end
 

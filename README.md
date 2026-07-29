@@ -242,6 +242,7 @@ commits have been tracked on the new runner.
 | `time-floor` | `1us` | Absolute time change also required |
 | `memory-floor` | `0` | Absolute byte change also required |
 | `nruns` | `1` | Interleaved runs; all must agree |
+| `tune` | `auto` | `auto`: use `tune.json`, else `tune!`; `never`: declared parameters only; `always`: force `tune!` |
 | `verbose` | `true` | Stream each benchmark's progress to the job log as it runs |
 | `fail-on-regression` | `false` | Fail the job on a regression |
 | `release-baseline` | `true` | On a version bump, compare against the last release tag |

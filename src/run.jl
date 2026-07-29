@@ -130,9 +130,14 @@ function _script_hash(dir::AbstractString, script::AbstractString)
 end
 
 """
-    run_revision(repo, rev, script; env, threads, retune, verbose, stream, io) -> RevisionRun
+    run_revision(repo, rev, script; env, threads, tune, verbose, stream, io) -> RevisionRun
 
 Run the suite for one revision. Never mutates `repo`.
+
+`tune` controls benchmark parameter tuning: `:auto` (default) loads a committed
+`tune.json` if present and otherwise calls `tune!` (skipped when every leaf
+declares `evals`); `:never` skips tuning entirely and runs with the parameters
+declared in the suite; `:always` forces `tune!`, ignoring any `tune.json`.
 
 `verbose` (default `true`) is passed to `BenchmarkTools.run`, so the subprocess
 names each benchmark as it executes it. `stream` (default: follows `verbose`)
@@ -144,11 +149,13 @@ function run_revision(
         repo::AbstractString, rev, script::AbstractString;
         env::AbstractDict = Dict{String, String}(),
         threads::Int = 1,
-        retune::Bool = false,
+        tune::Symbol = :auto,
         verbose::Bool = true,
         stream::Bool = verbose,
         io::IO = stdout,
     )
+    tune in (:auto, :never, :always) ||
+        throw(ArgumentError("tune must be :auto, :never or :always, got $(repr(tune))"))
     # Any failure (bad ref, worktree/subprocess/deserialisation error) becomes a
     # clean `ok = false` run so the caller can report a yellow state instead of
     # crashing. Only the measured SHA is trusted, and the worktree is checked out
@@ -179,7 +186,7 @@ function run_revision(
                 "benchmark script `$script` not found at revision $(_short(sha))")
 
         outfile = tempname() * ".json"
-        driver = _write_driver(srcdir, script, outfile, retune, verbose)
+        driver = _write_driver(srcdir, script, outfile, tune, verbose)
         # Each streamed line is tagged with the revision being measured, so the
         # interleaved baseline/target passes of a `compare` stay tellable apart.
         proc = _run_julia(driver, _subprocess_env(env, threads);
@@ -227,7 +234,7 @@ end
 
 # The subprocess driver. It builds an ephemeral project (so the caller's repo is
 # untouched), dev-installs the package from `srcdir`, runs the suite and saves it.
-function _write_driver(srcdir, script, outfile, retune, verbose)
+function _write_driver(srcdir, script, outfile, tune, verbose)
     benchdir = dirname(joinpath(srcdir, script))
     scriptpath = joinpath(srcdir, script)
     code = """
@@ -236,7 +243,7 @@ function _write_driver(srcdir, script, outfile, retune, verbose)
     const _BENCHDIR = $(repr(benchdir))
     const _SCRIPT = $(repr(scriptpath))
     const _OUT = $(repr(outfile))
-    const _RETUNE = $(repr(retune))
+    const _TUNE = $(repr(tune))
     const _VERBOSE = $(repr(verbose))
 
     env = mktempdir(; prefix = "tachometer_env_")
@@ -263,10 +270,13 @@ function _write_driver(srcdir, script, outfile, retune, verbose)
     isdefined(Main, :SUITE) || error("benchmark script did not define `SUITE`")
     suite = Main.SUITE::BenchmarkGroup
 
+    # `:never` runs with the parameters declared in the suite, untouched.
     paramsfile = joinpath(_BENCHDIR, "tune.json")
-    if !_RETUNE && isfile(paramsfile)
+    if _TUNE === :always
+        tune!(suite)
+    elseif _TUNE === :auto && isfile(paramsfile)
         loadparams!(suite, BenchmarkTools.load(paramsfile)[1], :evals, :samples)
-    elseif any(((_, b),) -> !b.params.evals_set, BenchmarkTools.leaves(suite))
+    elseif _TUNE === :auto && any(((_, b),) -> !b.params.evals_set, BenchmarkTools.leaves(suite))
         # Skipped when every leaf declares `evals`: tuning would be a per-leaf no-op,
         # but the group-level `tune!` still runs a ~0.5 s gcscrub per subgroup.
         tune!(suite)
