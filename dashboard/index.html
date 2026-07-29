@@ -97,6 +97,24 @@
   .group h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
               color: var(--muted); margin: 26px 4px 10px; font-weight: 650; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  /* Group jump navigation on the graphs page */
+  .gwrap { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 4px 20px;
+           align-items: start; }
+  /* --barh tracks the sticky bar's height (set from JS) so jump targets and
+     the sidenav clear it instead of sliding underneath. */
+  .gwrap .group { scroll-margin-top: calc(var(--barh, 44px) + 10px); }
+  .sidenav { position: sticky; top: calc(var(--barh, 44px) + 12px);
+             display: flex; flex-direction: column; gap: 2px;
+             max-height: calc(100vh - var(--barh, 44px) - 24px); overflow-y: auto; padding-top: 18px; }
+  .sidenav a { color: var(--muted); font-size: 12.5px; padding: 5px 10px; border-radius: 6px; }
+  .sidenav a:hover { color: var(--ink); text-decoration: none;
+                     background: color-mix(in srgb, var(--series) 6%, transparent); }
+  .sidenav a.on { color: var(--ink); font-weight: 600; background: var(--series-soft); }
+  .sidenav .cnt { color: var(--faint); font-size: 11px; }
+  @media (max-width: 1000px){
+    .gwrap { grid-template-columns: 1fr; }
+    .sidenav { display: none; }
+  }
   .bench { padding: 10px 12px 4px; min-width: 0; }
   .bench-head { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 4px; }
   .bench-head .name { font-size: 12.5px; font-weight: 600; min-width: 0; overflow: hidden;
@@ -134,13 +152,30 @@
   .modal .plot { height: 62vh; }
 
   /* Compare */
-  .cmp-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
-  .cmp-bar label { color: var(--muted); font-size: 12px; }
-  .cmp-bar select { max-width: 340px; border: 1px solid var(--hairline); border-radius: 8px;
-    background: var(--card); color: var(--ink); font-size: 12.5px; padding: 6px 8px;
+  .cmp-head { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4px 18px;
+              align-items: center; padding: 14px 16px; margin-bottom: 14px; }
+  .cmp-side { min-width: 0; }
+  .cmp-side .role { color: var(--faint); font-size: 11px; text-transform: uppercase;
+                    letter-spacing: .08em; }
+  .cmp-side .id { font-size: 15px; margin: 3px 0 1px; }
+  .cmp-side .id .chip { margin-left: 8px; }
+  .cmp-side .cmsg { color: var(--muted); font-size: 12.5px; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; margin-bottom: 8px; }
+  .cmp-head select { width: 100%; border: 1px solid var(--hairline); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-size: 12.5px; padding: 6px 26px 6px 8px;
     font-family: ui-monospace, Menlo, Consolas, monospace; }
-  .cmp-bar .swap { border: 1px solid var(--hairline); background: var(--card); color: var(--muted);
-                   border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 13px; }
+  .cmp-head .swap { border: 1px solid var(--hairline); background: var(--card); color: var(--muted);
+                    border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 13px; }
+  @media (max-width: 640px){
+    .cmp-head { grid-template-columns: 1fr; }
+    .cmp-head .swap { justify-self: start; }
+  }
+  .cmp-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .cmp-ctl .lbl { color: var(--muted); font-size: 12px; }
+  .cmp-ctl .cat { border: 1px solid var(--hairline); background: none; color: var(--ink);
+                  font-size: 12px; border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+  .cmp-ctl .cat[aria-pressed=false] { color: var(--faint); opacity: .55; }
+  .cmp-ctl .cat.all { font-weight: 600; margin-right: 2px; }
   .cmp-summary { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
                  padding: 12px 16px; margin-bottom: 14px; }
   .cmp-summary .big { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -158,7 +193,7 @@
   /* Commits timeline */
   .timeline { padding: 4px 0; }
   .commit { display: flex; gap: 12px; align-items: baseline; padding: 7px 16px;
-            border-bottom: 1px solid var(--grid); cursor: pointer; }
+            border-bottom: 1px solid var(--grid); }
   .commit:last-child { border-bottom: 0; }
   .commit:hover { background: color-mix(in srgb, var(--series) 4%, transparent); }
   .commit .date { flex: none; color: var(--faint); font-size: 12px; width: 82px;
@@ -167,6 +202,10 @@
   .commit .msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .commit .spacer { flex: 1; }
   .commit .chip { font-size: 11px; }
+  .commit .cmpbtn { flex: none; border: 1px solid var(--hairline); background: none;
+                    color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
+                    padding: 3px 7px; border-radius: 6px; align-self: center; }
+  .commit .cmpbtn:hover { color: var(--ink); border-color: var(--faint); }
   .tl-hint { color: var(--faint); font-size: 11.5px; margin: 8px 4px 12px; }
 
   #tooltip { position: fixed; pointer-events: none; z-index: 20; display: none; max-width: 360px;
@@ -243,9 +282,12 @@ const RANGES = [
 ];
 const CHIP_EPS = 1.0;   // |Δ%| below this renders as neutral (likely noise)
 const SYNC_KEY = "tach";
+// Touch devices get larger axis/marker type — 10.5px canvas text is
+// unreadable at phone viewing distances.
+const COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
 
 const state = { page: "graphs", stat: null, view: "pct", range: "all", from: "", to: "",
-                q: "", before: "", after: "", fs: "", data: null,
+                q: "", before: "", after: "", fs: "", sort: "delta", hidecats: "", data: null,
                 releasesBySha: Object.create(null), cards: [], overview: null, modal: null };
 
 const $ = id => document.getElementById(id);
@@ -306,7 +348,31 @@ function envChangeDesc(prev, r){
 
 // --- data loading ------------------------------------------------------------
 
+// Favicon: prefer the Documenter docs' icon — the docs live as siblings of the
+// benchmarks/ subdir on gh-pages — falling back to the header gauge.
+async function setFavicon(){
+  const link = document.createElement("link");
+  link.rel = "icon";
+  for(const p of ["../stable/assets/favicon.ico", "../dev/assets/favicon.ico"]){
+    try {
+      const r = await fetch(p, { method: "HEAD" });
+      if(r.ok && /image|icon/.test(r.headers.get("content-type") || "")){
+        link.href = p; link.type = "image/x-icon";
+        document.head.appendChild(link);
+        return;
+      }
+    } catch(_){}
+  }
+  link.href = "data:image/svg+xml," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+    '<path d="M4 17 A9 9 0 1 1 20 17" fill="none" stroke="#0a7ea6" stroke-width="2.4" stroke-linecap="round"/>' +
+    '<line x1="12" y1="14.5" x2="17" y2="8" stroke="#b42318" stroke-width="2" stroke-linecap="round"/>' +
+    '<circle cx="12" cy="15" r="1.6" fill="#62707d"/></svg>');
+  document.head.appendChild(link);
+}
+
 async function load(){
+  setFavicon();
   const theme = new URLSearchParams(location.search).get("theme");
   if(theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
   let doc;
@@ -452,6 +518,8 @@ function readHash(){
   if(SHA_RE.test(p.get("before") || "")) state.before = p.get("before");
   if(SHA_RE.test(p.get("after") || "")) state.after = p.get("after");
   if(p.get("fs")) state.fs = p.get("fs");
+  if(p.get("sort") === "name") state.sort = "name";
+  if(p.get("hide")) state.hidecats = p.get("hide");
 }
 function writeHash(){
   const p = new URLSearchParams();
@@ -463,6 +531,8 @@ function writeHash(){
   if(state.before) p.set("before", state.before);
   if(state.after) p.set("after", state.after);
   if(state.fs) p.set("fs", state.fs);
+  if(state.sort !== "delta") p.set("sort", state.sort);
+  if(state.hidecats) p.set("hide", state.hidecats);
   history.replaceState(null, "", "#" + p.toString());
 }
 
@@ -568,6 +638,8 @@ function statValue(rec, key){
 let observer = null, roTimer = null;
 
 function teardown(){
+  $("tooltip").style.display = "none";
+  if(state.scrollFn){ window.removeEventListener("scroll", state.scrollFn); state.scrollFn = null; }
   closeModal(false);
   for(const c of state.cards) if(c.chart) c.chart.destroy();
   if(state.overview && state.overview.chart) state.overview.chart.destroy();
@@ -615,13 +687,42 @@ function renderGraphsPage(host){
     if(!groups.has(g)) groups.set(g, []);
     groups.get(g).push(s);
   }
-  for(const g of [...groups.keys()].sort((a,b) => (b==="")-(a==="") || (a<b?-1:1))){
+  const ordered = [...groups.keys()].sort((a,b) => (b==="")-(a==="") || (a<b?-1:1));
+  const wrap = el("div","gwrap");
+  const main = el("div");
+  const nav = ordered.length > 1 ? el("nav","sidenav") : null;
+  if(nav) nav.setAttribute("aria-label", "Benchmark groups");
+  const sections = [];
+  for(const g of ordered){
     const sec = el("section","group");
     if(g){ const h = el("h2"); h.textContent = g; sec.appendChild(h); }
     const grid = el("div","grid");
     for(const s of groups.get(g)) grid.appendChild(renderCard(recs, xs, s, markers));
     sec.appendChild(grid);
-    host.appendChild(sec);
+    main.appendChild(sec);
+    if(nav){
+      const a = el("a"); a.href = "#";
+      a.append((g || "other") + " ");
+      const c = el("span","cnt"); c.textContent = groups.get(g).length;
+      a.appendChild(c);
+      // scrollIntoView instead of an anchor href — the hash carries app state.
+      a.addEventListener("click", e => { e.preventDefault(); sec.scrollIntoView({ behavior: "smooth" }); });
+      nav.appendChild(a);
+      sections.push([sec, a]);
+    }
+  }
+  if(nav) wrap.appendChild(nav);
+  wrap.appendChild(main);
+  host.appendChild(wrap);
+  if(nav){
+    const onScroll = () => {
+      let cur = sections[0];
+      for(const s of sections) if(s[0].getBoundingClientRect().top <= barH + 48) cur = s;
+      for(const s of sections) s[1].classList.toggle("on", s === cur);
+    };
+    state.scrollFn = onScroll;
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
   }
   if(state.fs && state.ctx.byKey.has(state.fs)) openModal(state.fs);
   else if(state.fs){ state.fs = ""; writeHash(); }
@@ -750,7 +851,7 @@ function renderComparePage(host){
   if(!state.before || !recBySha(state.before)) state.before = def.before;
   if(!state.after || !recBySha(state.after)) state.after = def.after;
 
-  const bar = el("div","cmp-bar");
+  const head = el("div","card cmp-head");
   const mkSel = (which) => {
     const sel = el("select");
     sel.setAttribute("aria-label", which + " commit");
@@ -766,18 +867,72 @@ function renderComparePage(host){
     sel.addEventListener("change", () => { state[which] = sel.value; onControlChange(); });
     return sel;
   };
-  const lb = el("label"); lb.textContent = "before";
-  const la = el("label"); la.textContent = "after";
+  const mkSide = (which) => {
+    const side = el("div","cmp-side");
+    const role = el("div","role"); role.textContent = which;
+    const rec = recBySha(state[which]);
+    const idr = el("div","id mono");
+    const url = commitURL(rec.commit);
+    if(url){
+      const a = el("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = rec.commit.slice(0,7);
+      idr.appendChild(a);
+    } else idr.append(rec.commit.slice(0,7));
+    idr.append(" · " + (rec.date||"").slice(0,10));
+    const tag = state.releasesBySha[rec.commit];
+    if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; idr.appendChild(t); }
+    const msg = el("div","cmsg"); msg.textContent = rec.message || ""; msg.title = rec.message || "";
+    side.append(role, idr, msg, mkSel(which));
+    return side;
+  };
   const swap = el("button","swap"); swap.textContent = "⇄"; swap.title = "Swap commits";
   swap.addEventListener("click", () => {
     const t = state.before; state.before = state.after; state.after = t; onControlChange();
   });
-  bar.append(lb, mkSel("before"), swap, la, mkSel("after"));
-  host.appendChild(bar);
+  head.append(mkSide("before"), swap, mkSide("after"));
+  host.appendChild(head);
 
   const rb = recBySha(state.before), ra = recBySha(state.after);
   const q = state.q.toLowerCase();
-  const keys = Object.keys(ra.benchmarks).sort().filter(k => !q || k.toLowerCase().includes(q));
+  let keys = Object.keys(ra.benchmarks).sort().filter(k => !q || k.toLowerCase().includes(q));
+
+  // Sort order and per-category toggles for the table.
+  const catOf = k => k.includes("/") ? k.slice(0, k.indexOf("/")) : "other";
+  const counts = new Map();
+  for(const k of keys) counts.set(catOf(k), (counts.get(catOf(k)) || 0) + 1);
+  const hidden = new Set(state.hidecats.split(",").filter(c => counts.has(c)));
+  const ctl = el("div","cmp-ctl");
+  const slbl = el("span","lbl"); slbl.textContent = "sort";
+  const sortSeg = el("div","seg");
+  for(const [key, label] of [["delta", "Δ"], ["name", "name"]]){
+    const b = el("button"); b.textContent = label; b.ariaPressed = state.sort === key;
+    b.addEventListener("click", () => { state.sort = key; onControlChange(); });
+    sortSeg.appendChild(b);
+  }
+  ctl.append(slbl, sortSeg);
+  if(counts.size > 1){
+    // Master toggle: behaves like a "select all" checkbox for the categories.
+    const allOn = hidden.size === 0;
+    const all = el("button","cat all"); all.textContent = "all";
+    all.ariaPressed = allOn;
+    all.title = allOn ? "Hide all categories" : "Show all categories";
+    all.addEventListener("click", () => {
+      state.hidecats = allOn ? [...counts.keys()].join(",") : "";
+      onControlChange();
+    });
+    ctl.appendChild(all);
+    for(const c of [...counts.keys()].sort()){
+      const b = el("button","cat"); b.textContent = c + " (" + counts.get(c) + ")";
+      b.ariaPressed = !hidden.has(c);
+      b.title = (hidden.has(c) ? "Show " : "Hide ") + c + " benchmarks";
+      b.addEventListener("click", () => {
+        hidden.has(c) ? hidden.delete(c) : hidden.add(c);
+        state.hidecats = [...hidden].join(","); onControlChange();
+      });
+      ctl.appendChild(b);
+    }
+  }
+  keys = keys.filter(k => !hidden.has(catOf(k)));
   const rows = [];
   let logSum = 0, n = 0, worse = 0, better = 0;
   for(const k of keys){
@@ -787,34 +942,48 @@ function renderComparePage(host){
       if(pct >= CHIP_EPS) worse++; else if(pct <= -CHIP_EPS) better++; }
     rows.push({ key: k, vb, va, pct });
   }
+  if(state.sort === "name") rows.sort((a,b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  else rows.sort((a,b) => (b.pct == null) - (a.pct == null) || (b.pct||0) - (a.pct||0));
+
+  // Always rendered — even with every row filtered out — so toggling
+  // categories doesn't make the summary pop in and out and reflow the page.
+  {
+    const sum = el("div","card cmp-summary");
+    const g = n ? (Math.exp(logSum/n) - 1) * 100 : null;
+    const big = el("span","big mono"); big.textContent = fmtPct(g);
+    if(g != null && Math.abs(g) >= CHIP_EPS) big.classList.add(g > 0 ? "bad" : "good");
+    const lbl = el("span","lbl");
+    lbl.textContent = statDef().label.toLowerCase() + " geomean · " + n + " benchmarks · " +
+      worse + " regressed · " + better + " improved (≥" + CHIP_EPS + "%)";
+    sum.append(big, lbl);
+    if(regimeKey(rb) !== regimeKey(ra)){
+      const warn = el("span","lbl"); warn.style.color = getVar("--bad");
+      warn.textContent = "⚠ different measurement environments — not directly comparable (" +
+        envChangeDesc(rb, ra) + ")";
+      sum.appendChild(warn);
+    }
+    host.appendChild(sum);
+  }
+  host.appendChild(ctl);
   if(rows.length === 0)
     return host.appendChild(Object.assign(el("div","empty"), { textContent: "No benchmarks match." }));
-  rows.sort((a,b) => (b.pct == null) - (a.pct == null) || (b.pct||0) - (a.pct||0));
-
-  const sum = el("div","card cmp-summary");
-  const g = n ? (Math.exp(logSum/n) - 1) * 100 : null;
-  const big = el("span","big mono"); big.textContent = fmtPct(g);
-  if(g != null && Math.abs(g) >= CHIP_EPS) big.classList.add(g > 0 ? "bad" : "good");
-  const lbl = el("span","lbl");
-  lbl.textContent = statDef().label.toLowerCase() + " geomean · " + n + " benchmarks · " +
-    worse + " regressed · " + better + " improved (≥" + CHIP_EPS + "%)";
-  sum.append(big, lbl);
-  if(regimeKey(rb) !== regimeKey(ra)){
-    const warn = el("span","lbl"); warn.style.color = getVar("--bad");
-    warn.textContent = "⚠ different measurement environments — not directly comparable (" +
-      envChangeDesc(rb, ra) + ")";
-    sum.appendChild(warn);
-  }
-  host.appendChild(sum);
 
   const wrap = el("div","card"); wrap.style.overflow = "hidden";
   const tbl = el("table","cmp");
   const thead = el("thead"); const trh = el("tr");
   const mkTh = (txt, cls) => { const th = el("th", cls); th.textContent = txt; return th; };
-  trh.append(mkTh("Benchmark"),
-             mkTh(state.before.slice(0,7) + " · " + (rb.date||"").slice(0,10), "num"),
-             mkTh(state.after.slice(0,7) + " · " + (ra.date||"").slice(0,10), "num"),
-             mkTh("Δ", "num"));
+  const mkShaTh = (sha, rec) => {
+    const th = el("th","num");
+    const url = commitURL(sha);
+    if(url){
+      const a = el("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = sha.slice(0,7);
+      th.appendChild(a);
+    } else th.append(sha.slice(0,7));
+    th.append(" · " + (rec.date||"").slice(0,10));
+    return th;
+  };
+  trh.append(mkTh("Benchmark"), mkShaTh(state.before, rb), mkShaTh(state.after, ra), mkTh("Δ", "num"));
   thead.appendChild(trh); tbl.appendChild(thead);
   const tbody = el("tbody");
   for(const r of rows){
@@ -846,7 +1015,7 @@ function renderCommitsPage(host){
   const hint = el("div","tl-hint");
   hint.textContent = "Δ is the " + statDef().label.toLowerCase() +
     " geomean vs the previous benchmarked commit" + (state.q ? " (filtered benchmarks)" : "") +
-    " — click a commit to compare it against its predecessor.";
+    " — ⇄ shows the full comparison against the predecessor.";
   host.appendChild(hint);
 
   const list = el("div","card timeline");
@@ -856,10 +1025,19 @@ function renderCommitsPage(host){
     const date = el("span","date"); date.textContent = (r.date||"").slice(0,10);
     const sha = el("a","sha"); sha.textContent = (r.commit||"").slice(0,7);
     const url = commitURL(r.commit);
-    if(url){ sha.href = url; sha.target = "_blank"; sha.rel = "noopener";
-             sha.addEventListener("click", e => e.stopPropagation()); }
+    if(url){ sha.href = url; sha.target = "_blank"; sha.rel = "noopener"; }
     const msg = el("span","msg"); msg.textContent = r.message || ""; msg.title = r.message || "";
-    row.append(date, sha, msg);
+    row.append(date, sha);
+    if(prev){
+      const cmp = el("button","cmpbtn"); cmp.textContent = "⇄"; cmp.title = "Compare against predecessor";
+      cmp.setAttribute("aria-label", "Compare " + (r.commit||"").slice(0,7) + " against its predecessor");
+      cmp.addEventListener("click", () => {
+        state.before = prev.commit; state.after = r.commit; state.page = "compare"; onControlChange();
+        window.scrollTo(0, 0);
+      });
+      row.appendChild(cmp);
+    }
+    row.append(msg);
     const tag = state.releasesBySha[r.commit];
     if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; row.appendChild(t); }
     if(prev && regimeKey(prev) !== regimeKey(r)){
@@ -883,12 +1061,6 @@ function renderCommitsPage(host){
     else if(pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(pct); }
     else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(pct); }
     row.appendChild(chip);
-    if(prev){
-      row.addEventListener("click", () => {
-        state.before = prev.commit; state.after = r.commit; state.page = "compare"; onControlChange();
-        window.scrollTo(0, 0);
-      });
-    } else { row.style.cursor = "default"; }
     list.appendChild(row);
   }
   host.appendChild(list);
@@ -902,7 +1074,10 @@ function initChart(c){
   const labeled = isOverview || c.labeled;
   const pctMode = isOverview || state.view === "pct";
   const fmtY = pctMode ? fmtPct : fmtAbs;
-  const axisFont = "10.5px ui-monospace, Menlo, Consolas, monospace";
+  // Integer px only: uPlot rescales the size for high-DPR canvases with
+  // /(\d+)px/, which mangles fractional sizes ("10.5px" -> "10.10px"), leaving
+  // the labels at roughly 1/dpr of the intended size on retina/phone screens.
+  const axisFont = (COARSE ? 13 : 11) + "px ui-monospace, Menlo, Consolas, monospace";
   const w = c.plotEl.clientWidth || 320, h = c.plotEl.clientHeight || 130;
   // One uPlot series per environment segment (identically styled), so the line
   // breaks at regime changes instead of drawing a misleading connector.
@@ -922,10 +1097,10 @@ function initChart(c){
     scales: { x: { time: true } },
     series: [ {}, ...ysSplit.map(mkSeries) ],
     axes: [
-      { stroke: getVar("--faint"), font: axisFont, size: 26, space: 80,
+      { stroke: getVar("--faint"), font: axisFont, size: COARSE ? 42 : 26, space: COARSE ? 100 : 80,
         grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 } },
       { stroke: getVar("--faint"), font: axisFont, size: autoAxisSize,
-        space: labeled ? 34 : 30, gap: 4,
+        space: labeled ? (COARSE ? 42 : 34) : (COARSE ? 38 : 30), gap: 4,
         grid: { stroke: getVar("--grid"), width: 1 }, ticks: { show: false },
         values: (u, vals) => vals.map(fmtY) },
     ],
@@ -948,10 +1123,17 @@ function initChart(c){
   over.addEventListener("touchmove", touchCursor, { passive: true });
   over.addEventListener("touchend", () => { lastTouch = performance.now(); c.touch = false; }, { passive: true });
   over.addEventListener("touchcancel", () => { c.touch = false; }, { passive: true });
+  // Clicking a point opens the predecessor comparison for that commit; the
+  // GitHub links live on the compare and commits pages.
   over.addEventListener("click", () => {
     if(performance.now() - lastTouch < 700) return;
     const idx = c.chart.cursor.idx; if(idx == null) return;
-    const url = commitURL(c.recs[idx].commit); if(url) window.open(url, "_blank", "noopener");
+    const all = state.data.records;
+    const i = all.findIndex(r => r.commit === c.recs[idx].commit);
+    if(i <= 0) return;
+    closeModal(true);
+    state.before = all[i-1].commit; state.after = all[i].commit; state.page = "compare";
+    onControlChange(); window.scrollTo(0, 0);
   });
 }
 
@@ -972,16 +1154,18 @@ function autoAxisSize(u, values, axisIdx, cycleNum){
 // measurement-regime changes (dotted) — regime changes can look like perf changes.
 function markerPlugin(c, labeled){
   return { hooks: { draw: u => {
-    const ctx = u.ctx;
+    // The draw hook works in raw canvas pixels, so scale by devicePixelRatio.
+    const ctx = u.ctx, dpr = devicePixelRatio || 1;
     ctx.save();
     const draw = (idxs, color, dash, label) => {
-      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.setLineDash(dash); ctx.lineWidth = 1;
-      ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
+      ctx.strokeStyle = color; ctx.fillStyle = color;
+      ctx.setLineDash(dash.map(d => d * dpr)); ctx.lineWidth = dpr;
+      ctx.font = Math.round((COARSE ? 12 : 10) * dpr) + "px ui-monospace, Menlo, Consolas, monospace";
       for(const i of idxs){
         const x = Math.round(u.valToPos(u.data[0][i], "x", true));
         if(x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
         ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top + u.bbox.height); ctx.stroke();
-        if(labeled && label) ctx.fillText(label(i), x + 4, u.bbox.top + 10);
+        if(labeled && label) ctx.fillText(label(i), x + 4*dpr, u.bbox.top + 10*dpr);
       }
     };
     draw(c.markers.env, getVar("--faint"), [1,3], labeled ? (() => "env") : null);
@@ -999,7 +1183,8 @@ function zeroLinePlugin(pctMode){
     if(sc.min == null || sc.min > 0 || sc.max < 0) return;
     const y = Math.round(u.valToPos(0, "y", true));
     const ctx = u.ctx;
-    ctx.save(); ctx.strokeStyle = getVar("--faint"); ctx.lineWidth = 1; ctx.setLineDash([]);
+    ctx.save(); ctx.strokeStyle = getVar("--faint");
+    ctx.lineWidth = devicePixelRatio || 1; ctx.setLineDash([]);
     ctx.globalAlpha = 0.6;
     ctx.beginPath(); ctx.moveTo(u.bbox.left, y); ctx.lineTo(u.bbox.left + u.bbox.width, y); ctx.stroke();
     ctx.restore();
@@ -1061,6 +1246,21 @@ document.addEventListener("touchstart", e => {
 document.addEventListener("mousemove", e => {
   if(!e.target.closest || !e.target.closest(".u-over")) $("tooltip").style.display = "none";
 });
+
+// Keep --barh in sync with the sticky bar's real height (it wraps on narrow
+// screens), so scroll-margin-top, the sidenav offset and the scroll spy all
+// clear it.
+let barH = 0;
+{
+  const bar = document.querySelector(".bar");
+  const setBarH = () => {
+    barH = bar.offsetHeight;
+    document.documentElement.style.setProperty("--barh", barH + "px");
+    if(state.scrollFn) state.scrollFn();
+  };
+  new ResizeObserver(setBarH).observe(bar);
+  setBarH();
+}
 
 window.addEventListener("resize", () => {
   clearTimeout(roTimer);
