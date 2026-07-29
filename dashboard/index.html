@@ -7,102 +7,266 @@
 <link rel="stylesheet" href="uPlot.min.css">
 <style>
   :root {
-    --bg: #ffffff; --fg: #1b1f24; --muted: #6a737d; --line: #e1e4e8;
-    --panel: #f6f8fa; --accent: #2563eb; --release: #d1495b;
+    color-scheme: light;
+    --bg: #f5f7f8; --card: #ffffff; --ink: #16202a; --muted: #62707d; --faint: #8a97a3;
+    --hairline: #e4e9ed; --grid: #edf0f3;
+    --series: #0a7ea6; --series-soft: rgba(10,126,166,.10);
+    --release: #4a3aa7; --good: #067647; --bad: #b42318;
+    --chip-good: rgba(6,118,71,.09); --chip-bad: rgba(180,35,24,.08); --chip-flat: rgba(98,112,125,.10);
+    --scrim: rgba(22,32,42,.45);
   }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
-      --panel: #161b22; --accent: #58a6ff; --release: #f0768b;
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg: #0d1116; --card: #151b22; --ink: #e7edf3; --muted: #93a1ae; --faint: #6e7b87;
+      --hairline: #232c35; --grid: #1c242d;
+      --series: #2ea3c9; --series-soft: rgba(46,163,201,.13);
+      --release: #9085e9; --good: #57cf8f; --bad: #f2766b;
+      --chip-good: rgba(87,207,143,.12); --chip-bad: rgba(242,118,107,.12); --chip-flat: rgba(147,161,174,.12);
+      --scrim: rgba(0,0,0,.6);
     }
   }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d1116; --card: #151b22; --ink: #e7edf3; --muted: #93a1ae; --faint: #6e7b87;
+    --hairline: #232c35; --grid: #1c242d;
+    --series: #2ea3c9; --series-soft: rgba(46,163,201,.13);
+    --release: #9085e9; --good: #57cf8f; --bad: #f2766b;
+    --chip-good: rgba(87,207,143,.12); --chip-bad: rgba(242,118,107,.12); --chip-flat: rgba(147,161,174,.12);
+    --scrim: rgba(0,0,0,.6);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         color: var(--fg); background: var(--bg); }
-  header { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex;
-           align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header .meta { color: var(--muted); font-size: 12px; }
-  header a { color: var(--accent); text-decoration: none; }
-  .layout { display: flex; align-items: stretch; min-height: calc(100vh - 52px); }
-  .sidebar { width: 300px; flex: none; border-right: 1px solid var(--line);
-             padding: 12px; overflow-y: auto; max-height: calc(100vh - 52px); }
-  main { flex: 1; padding: 16px 18px; min-width: 0; position: relative; }
-  input[type=search] { width: 100%; padding: 7px 9px; border: 1px solid var(--line);
-                       border-radius: 6px; background: var(--bg); color: var(--fg); }
-  .controls { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
-  .controls button { border: 1px solid var(--line); background: var(--panel); color: var(--fg);
-                     border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
-  .controls button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
-  .group { margin-top: 12px; }
-  .group h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-              color: var(--muted); margin: 0 0 4px; }
-  .group label { display: flex; align-items: center; gap: 7px; padding: 2px 0; cursor: pointer;
-                 font-size: 13px; word-break: break-all; }
-  .releases { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; }
-  .releases h3 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
-  .releases a { display: block; color: var(--accent); text-decoration: none; font-size: 12px; padding: 1px 0; }
-  .empty { color: var(--muted); max-width: 560px; }
-  .empty code { background: var(--panel); padding: 1px 5px; border-radius: 4px; }
-  #tooltip { position: absolute; pointer-events: none; z-index: 10; display: none;
-             background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
-             padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); max-width: 340px; }
-  #tooltip .sha { color: var(--muted); }
-  #tooltip .msg { margin: 3px 0; }
-  #tooltip .tag { color: var(--release); font-weight: 600; }
-  #tooltip .row { display: flex; justify-content: space-between; gap: 12px; }
-  #tooltip .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
-  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
-  .u-legend { font-size: 12px; }
-  /* Narrow screens: stack the sidebar above the chart so the chart gets the full
-     width instead of being crushed into a sliver on the right. */
+  html { scrollbar-gutter: stable; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace; }
+  a { color: var(--series); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header { max-width: 1360px; margin: 0 auto; padding: 20px 20px 10px;
+           display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  header .gauge { align-self: center; flex: none; }
+  header h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  header h1 .dim { color: var(--muted); font-weight: 400; }
+  header .fp { margin-left: auto; color: var(--faint); font-size: 11.5px;
+               font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  .bar { position: sticky; top: 0; z-index: 5; border-block: 1px solid var(--hairline);
+         background: color-mix(in srgb, var(--bg) 82%, transparent);
+         backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .bar-inner { max-width: 1360px; margin: 0 auto; padding: 9px 20px;
+               display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 2px; background: var(--card); border: 1px solid var(--hairline);
+          border-radius: 8px; padding: 2px; }
+  .tabs button { border: 0; background: none; padding: 4px 12px; border-radius: 6px;
+                 color: var(--muted); cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; }
+  .tabs button[aria-pressed=true] { background: color-mix(in srgb, var(--series) 12%, transparent);
+                                    color: var(--ink); }
+  .bar input[type=search] { flex: 1 1 140px; min-width: 120px; max-width: 260px;
+    padding: 6px 10px; border: 1px solid var(--hairline); border-radius: 8px;
+    background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--hairline); border-radius: 8px;
+         background: var(--card); overflow: hidden; }
+  .seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px;
+                padding: 6px 11px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--hairline); }
+  .seg button[aria-pressed=true] { color: var(--ink); font-weight: 600;
+    background: color-mix(in srgb, var(--series) 10%, transparent); }
+  .dates { display: inline-flex; gap: 4px; align-items: center; color: var(--faint); font-size: 12px; }
+  .dates input { border: 1px solid var(--hairline); border-radius: 8px; background: var(--card);
+                 color: var(--ink); font: inherit; font-size: 12px; padding: 4px 6px; width: 118px; }
+  .bar .meta { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--series); outline-offset: 1px; }
+  body[data-page="compare"] #viewSeg, body[data-page="compare"] #rangeSeg, body[data-page="compare"] .dates { display: none; }
+  body[data-page="commits"] #viewSeg { display: none; }
+
+  main { max-width: 1360px; margin: 0 auto; padding: 16px 20px 40px; }
+  .card { background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; }
+
+  .overview { display: flex; align-items: stretch; margin-bottom: 22px; overflow: hidden; }
+  .readout { flex: 0 0 218px; padding: 18px 20px; border-right: 1px solid var(--hairline);
+             display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+  .readout .big { font-size: 34px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1;
+                  font-variant-numeric: tabular-nums; }
+  .readout .big.good { color: var(--good); } .readout .big.bad { color: var(--bad); }
+  .readout .what { font-size: 12px; color: var(--muted); }
+  .readout .since { font-size: 11.5px; color: var(--faint); }
+  .ov-chart { flex: 1; min-width: 0; padding: 12px 14px 6px; }
+  .ov-note { color: var(--faint); font-size: 11.5px; margin: -14px 0 20px 4px; }
+
+  .group h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+              color: var(--muted); margin: 26px 4px 10px; font-weight: 650; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .bench { padding: 10px 12px 4px; min-width: 0; }
+  .bench-head { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 4px; }
+  .bench-head .name { font-size: 12.5px; font-weight: 600; min-width: 0; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+  .bench-head .val { margin-left: auto; color: var(--muted); font-size: 12px;
+                     font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .fsbtn { flex: none; border: 0; background: none; color: var(--faint); cursor: pointer;
+           font-size: 13px; line-height: 1; padding: 1px 2px; border-radius: 4px; opacity: 0;
+           align-self: center; }
+  .bench:hover .fsbtn, .fsbtn:focus-visible { opacity: 1; }
+  .fsbtn:hover { color: var(--ink); }
+  @media (hover: none) { .fsbtn { opacity: .6; } }
+  .chip { flex: none; font-size: 11px; font-weight: 650; border-radius: 5px; padding: 1px 6px;
+          font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .chip.good { color: var(--good); background: var(--chip-good); }
+  .chip.bad  { color: var(--bad);  background: var(--chip-bad); }
+  .chip.flat { color: var(--muted); background: var(--chip-flat); }
+  .chip.rel  { color: var(--release); background: color-mix(in srgb, var(--release) 12%, transparent); }
+  .bench .plot { height: 132px; }
+  .ov-chart .plot { height: 224px; }
+  .plot .u-over { cursor: crosshair; }
+
+  /* Fullscreen chart overlay */
+  .overlay { position: fixed; inset: 0; z-index: 15; background: var(--scrim);
+             display: flex; align-items: center; justify-content: center; padding: 4vh 3vw; }
+  .modal { width: min(1200px, 100%); max-height: 92vh; padding: 14px 18px 10px; display: flex;
+           flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+  .modal-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .modal-head .name { font-size: 14px; font-weight: 650; }
+  .modal-head .val { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .modal-head .close { margin-left: auto; border: 0; background: none; color: var(--muted);
+                       font-size: 18px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+  .modal-head .close:hover { color: var(--ink); }
+  .modal .plot { height: 62vh; }
+
+  /* Compare */
+  .cmp-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .cmp-bar label { color: var(--muted); font-size: 12px; }
+  .cmp-bar select { max-width: 340px; border: 1px solid var(--hairline); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-size: 12.5px; padding: 6px 8px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .cmp-bar .swap { border: 1px solid var(--hairline); background: var(--card); color: var(--muted);
+                   border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 13px; }
+  .cmp-summary { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+                 padding: 12px 16px; margin-bottom: 14px; }
+  .cmp-summary .big { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cmp-summary .big.good { color: var(--good); } .cmp-summary .big.bad { color: var(--bad); }
+  .cmp-summary .lbl { color: var(--muted); font-size: 12px; }
+  table.cmp { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.cmp th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+                 color: var(--muted); font-weight: 650; padding: 8px 12px; border-bottom: 1px solid var(--hairline); }
+  table.cmp th.num, table.cmp td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.cmp td { padding: 6px 12px; border-bottom: 1px solid var(--grid); }
+  table.cmp tr:hover td { background: color-mix(in srgb, var(--series) 4%, transparent); }
+  table.cmp td.key { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  table.cmp td .chip { font-size: 11.5px; }
+
+  /* Commits timeline */
+  .timeline { padding: 4px 0; }
+  .commit { display: flex; gap: 12px; align-items: baseline; padding: 7px 16px;
+            border-bottom: 1px solid var(--grid); cursor: pointer; }
+  .commit:last-child { border-bottom: 0; }
+  .commit:hover { background: color-mix(in srgb, var(--series) 4%, transparent); }
+  .commit .date { flex: none; color: var(--faint); font-size: 12px; width: 82px;
+                  font-variant-numeric: tabular-nums; }
+  .commit .sha { flex: none; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .commit .msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commit .spacer { flex: 1; }
+  .commit .chip { font-size: 11px; }
+  .tl-hint { color: var(--faint); font-size: 11.5px; margin: 8px 4px 12px; }
+
+  #tooltip { position: fixed; pointer-events: none; z-index: 20; display: none; max-width: 360px;
+             background: var(--card); border: 1px solid var(--hairline); border-radius: 8px;
+             padding: 8px 10px; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+  #tooltip .sha { color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+  #tooltip .tag { color: var(--release); font-weight: 650; margin-left: 6px; }
+  #tooltip .msg { margin: 3px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #tooltip .num { font-variant-numeric: tabular-nums; }
+  #tooltip .delta.good { color: var(--good); } #tooltip .delta.bad { color: var(--bad); }
+
+  .empty { color: var(--muted); max-width: 560px; padding: 40px 4px; }
+  .empty code { background: var(--card); border: 1px solid var(--hairline); padding: 1px 5px; border-radius: 4px; }
+  footer { max-width: 1360px; margin: 0 auto; padding: 0 20px 28px; color: var(--faint); font-size: 11.5px; }
+  .u-legend { display: none; }
   @media (max-width: 720px) {
-    .layout { flex-direction: column; }
-    .sidebar { width: auto; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--line); }
-    main { padding: 12px; }
+    .overview { flex-direction: column; }
+    .readout { border-right: 0; border-bottom: 1px solid var(--hairline); flex-basis: auto; }
+    .commit .date { width: auto; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .seg button, .tabs button { transition: background .12s ease, color .12s ease; }
   }
 </style>
 </head>
 <body>
 <header>
-  <h1 id="title">Tachometer</h1>
-  <span class="meta" id="submeta"></span>
-  <span class="meta" style="margin-left:auto" id="fpmeta"></span>
+  <svg class="gauge" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 17 A9 9 0 1 1 20 17" fill="none" stroke="var(--series)" stroke-width="2.4" stroke-linecap="round"/>
+    <line x1="12" y1="14.5" x2="17" y2="8" stroke="var(--bad)" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="12" cy="15" r="1.6" fill="var(--ink)"/>
+  </svg>
+  <h1 id="title">Tachometer <span class="dim">— benchmark history</span></h1>
+  <span class="fp" id="fpmeta"></span>
 </header>
-<div class="layout">
-  <aside class="sidebar">
-    <input type="search" id="search" placeholder="Filter benchmarks…" autocomplete="off">
-    <div class="controls">
-      <button id="mTime" aria-pressed="true">Time</button>
-      <button id="mMem" aria-pressed="false">Memory</button>
-      <button id="scale" aria-pressed="true">Log scale</button>
+<div class="bar">
+  <div class="bar-inner">
+    <nav class="tabs" id="tabs" aria-label="Pages"></nav>
+    <input type="search" id="search" placeholder="Filter benchmarks…" autocomplete="off" aria-label="Filter benchmarks">
+    <div class="seg" id="statSeg" role="group" aria-label="Statistic"></div>
+    <div class="seg" id="viewSeg" role="group" aria-label="Scale">
+      <button id="vPct" aria-pressed="true">% change</button>
+      <button id="vAbs" aria-pressed="false">Absolute</button>
     </div>
-    <div id="benchlist"></div>
-    <div class="releases" id="releases" hidden><h3>Releases</h3><div id="releaselist"></div></div>
-  </aside>
-  <main>
-    <div id="chart"></div>
-    <div id="tooltip"></div>
-    <div class="empty" id="empty" hidden></div>
-    <div class="hint" id="hint"></div>
-  </main>
+    <div class="seg" id="rangeSeg" role="group" aria-label="Time range"></div>
+    <span class="dates">
+      <input type="date" id="dFrom" aria-label="From date">–<input type="date" id="dTo" aria-label="To date">
+    </span>
+    <span class="meta" id="submeta"></span>
+  </div>
 </div>
+<main>
+  <div id="content"></div>
+  <div class="empty" id="empty" hidden></div>
+</main>
+<footer id="foot"></footer>
+<div id="tooltip"></div>
 <script src="uPlot.iife.min.js"></script>
 <script>
 "use strict";
-const PALETTE = ["#2563eb","#16a34a","#d1495b","#9333ea","#ea580c","#0891b2","#ca8a04","#db2777"];
-const state = { metric: "time", log: true, selected: new Set(), search: "", data: null, chart: null };
+
+const PAGES = [ ["graphs","Graphs"], ["compare","Compare"], ["commits","Commits"] ];
+const STATS = [
+  { key: "instructions", label: "Instructions", fmt: fmtCount },
+  { key: "time",         label: "Time",         fmt: fmtTime  },
+  { key: "memory",       label: "Memory",       fmt: fmtBytes },
+  { key: "allocs",       label: "Allocs",       fmt: fmtCount },
+];
+const RANGES = [
+  { key: "all", label: "All", days: Infinity },
+  { key: "1y",  label: "1y",  days: 365 },
+  { key: "3m",  label: "3m",  days: 91 },
+  { key: "1m",  label: "1m",  days: 30 },
+];
+const CHIP_EPS = 1.0;   // |Δ%| below this renders as neutral (likely noise)
+const SYNC_KEY = "tach";
+
+const state = { page: "graphs", stat: null, view: "pct", range: "all", from: "", to: "",
+                q: "", before: "", after: "", fs: "", data: null,
+                releasesBySha: Object.create(null), cards: [], overview: null, modal: null };
 
 const $ = id => document.getElementById(id);
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+const getVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
-function prettyTime(ns){ if(ns==null) return "—";
-  if(ns<1e3) return ns.toFixed(0)+" ns"; if(ns<1e6) return (ns/1e3).toPrecision(3)+" µs";
-  if(ns<1e9) return (ns/1e6).toPrecision(3)+" ms"; return (ns/1e9).toPrecision(3)+" s"; }
-function prettyMem(b){ if(b==null) return "—";
-  if(b<1024) return b.toFixed(0)+" B"; if(b<1048576) return (b/1024).toPrecision(3)+" KiB";
-  if(b<1073741824) return (b/1048576).toPrecision(3)+" MiB"; return (b/1073741824).toPrecision(3)+" GiB"; }
-const fmt = v => state.metric === "time" ? prettyTime(v) : prettyMem(v);
+function fmtTime(ns){ if(ns==null||!isFinite(ns)) return "—";
+  if(ns<1e3) return trim3(ns)+" ns"; if(ns<1e6) return trim3(ns/1e3)+" µs";
+  if(ns<1e9) return trim3(ns/1e6)+" ms"; return trim3(ns/1e9)+" s"; }
+function fmtBytes(b){ if(b==null||!isFinite(b)) return "—";
+  if(b<1024) return trim3(b)+" B"; if(b<1048576) return trim3(b/1024)+" KiB";
+  if(b<1073741824) return trim3(b/1048576)+" MiB"; return trim3(b/1073741824)+" GiB"; }
+function fmtCount(n){ if(n==null||!isFinite(n)) return "—";
+  if(n<1e3) return trim3(n); if(n<1e6) return trim3(n/1e3)+" k";
+  if(n<1e9) return trim3(n/1e6)+" M"; return trim3(n/1e9)+" G"; }
+function trim3(v){ return String(Number(v.toPrecision(3))); }
+function fmtPct(v){ if(v==null||!isFinite(v)) return "—";
+  return (v>0?"+":"") + v.toFixed(Math.abs(v)<10?1:0) + "%"; }
+const statDef = () => STATS.find(s => s.key === state.stat) || STATS[1];
+const fmtAbs = v => statDef().fmt(v);
+const shortName = k => k.includes("/") ? k.slice(k.indexOf("/")+1) : k;
 
 // Only build a commit URL from a validated repo URL and a hex sha.
 function commitURL(sha){
@@ -112,19 +276,27 @@ function commitURL(sha){
   return base.replace(/\/+$/,"") + "/commit/" + sha;
 }
 
+// Fingerprint identity of a record's measurement regime (CPU/OS/Julia/threads/suite).
+function regimeKey(r){
+  const f = r.fingerprint || {};
+  return [f.os, f.arch, f.julia, f.cpu, f.threads, f.backend, f.suite].join("|");
+}
+
+// --- data loading ------------------------------------------------------------
+
 async function load(){
+  const theme = new URLSearchParams(location.search).get("theme");
+  if(theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
   let doc;
   if(window.__TACHOMETER_DATA__){
     doc = window.__TACHOMETER_DATA__;           // standalone preview build
   } else {
-    // Manifest (always fresh) lists the shard files; past-year shards are
-    // immutable, so they are fetched with default caching (HTTP 304 on repeat).
     try {
+      // Manifest (always fresh) lists the shard files; past-year shards are
+      // immutable, so they are fetched with default caching (HTTP 304 on repeat).
       const idxRes = await fetch("./data/index.json?_=" + Date.now(), { cache: "no-store" });
       const idx = await idxRes.json();
       const shards = Array.isArray(idx.shards) ? idx.shards : [];
-      // Past-year shards are immutable -> fetch with default (cacheable) request.
-      // Only the latest (current-year) shard mutates, so cache-bust just that one.
       const latest = shards[shards.length - 1];
       const ver = encodeURIComponent(idx.generated_at || "");
       const docs = await Promise.all(shards.map(s =>
@@ -133,201 +305,677 @@ async function load(){
       const records = [].concat(...docs.map(d => (d && Array.isArray(d.records)) ? d.records : []));
       doc = { package: idx.package, repo_url: idx.repo_url,
               releases: Array.isArray(idx.releases) ? idx.releases : [],
-              fingerprint: idx.latest_fingerprint || {}, records };
+              fingerprint: idx.latest_fingerprint || {}, generated_at: idx.generated_at, records };
     } catch(e){ return showEmpty("Could not load <code>data/index.json</code>."); }
   }
   if(!doc || !Array.isArray(doc.records) || doc.records.length === 0)
     return showEmpty("No benchmark history yet. It appears after the tracking workflow runs on the default branch.");
   doc.records.sort((a,b) => (a.date_unix||0) - (b.date_unix||0));
-  doc.releases = doc.releases || [];
-  // Map commit sha -> release tag (release markers come from the manifest, not
-  // from per-record fields).
-  state.releasesBySha = Object.create(null);
-  for(const rel of doc.releases) if(rel && rel.commit) state.releasesBySha[rel.commit] = rel.tag;
+  for(const rel of (doc.releases || [])) if(rel && rel.commit) state.releasesBySha[rel.commit] = rel.tag;
   state.data = doc;
-  $("title").textContent = (doc.package || "Tachometer") + " — benchmark history";
+
+  const name = doc.package || "Tachometer";
+  document.title = name + " — benchmark history";
+  $("title").innerHTML = "";
+  $("title").append(name, Object.assign(el("span","dim"), { textContent: " — benchmark history" }));
+  const fp = doc.fingerprint || {};
+  $("fpmeta").textContent = [fp.os, fp.arch, fp.julia && ("julia "+fp.julia), fp.cpu].filter(Boolean).join(" · ");
+  $("submeta").textContent = "";
+  $("submeta").append(doc.records.length + " commits");
   if(/^https:\/\/[^\s"'<>]+$/.test(doc.repo_url || "")){
     const a = el("a"); a.href = doc.repo_url; a.textContent = "repository"; a.target = "_blank"; a.rel = "noopener";
-    $("submeta").textContent = doc.records.length + " commits · "; $("submeta").appendChild(a);
-  } else { $("submeta").textContent = doc.records.length + " commits"; }
-  const fp = doc.fingerprint || {};
-  $("fpmeta").textContent = [fp.os, fp.arch, fp.julia && ("Julia "+fp.julia), fp.cpu].filter(Boolean).join(" · ");
-  buildKeys(); renderSidebar(); renderReleases(); redraw();
-}
-
-function showEmpty(html){ $("empty").hidden = false; $("empty").innerHTML = html;
-  $("chart").hidden = true; $("hint").textContent = ""; }
-
-function buildKeys(){
-  const set = new Set();
-  for(const r of state.data.records) for(const k in r.benchmarks) set.add(k);
-  state.keys = [...set].sort();
-  if(state.selected.size === 0 && state.keys.length) state.selected.add(state.keys[0]);
-}
-
-function renderSidebar(){
-  const host = $("benchlist"); host.textContent = "";
-  const q = state.search.toLowerCase();
-  const groups = Object.create(null);   // null-proto: keys like "constructor" are safe
-  for(const k of state.keys){
-    if(q && !k.toLowerCase().includes(q)) continue;
-    const g = k.includes("/") ? k.slice(0, k.indexOf("/")) : "";
-    (groups[g] = groups[g] || []).push(k);
+    $("submeta").append(" · ", a);
   }
-  for(const g of Object.keys(groups).sort()){
-    const box = el("div","group");
-    if(g){ const h = el("h3"); h.textContent = g; box.appendChild(h); }
-    for(const k of groups[g]){
-      const lab = el("label");
-      const cb = el("input"); cb.type = "checkbox"; cb.checked = state.selected.has(k);
-      cb.addEventListener("change", () => { cb.checked ? state.selected.add(k) : state.selected.delete(k); redraw(); });
-      const span = el("span"); span.textContent = g ? k.slice(g.length+1) : k; span.title = k;
-      lab.appendChild(cb); lab.appendChild(span); box.appendChild(lab);
+  if(doc.generated_at) $("foot").textContent = "Updated " + doc.generated_at.slice(0,10) + " · made with Tachometer.jl";
+
+  readHash();
+  buildTabs(); buildStatSeg(); buildRangeSeg(); initDates(); syncControls();
+  rebuild();
+}
+
+function showEmpty(html){ $("empty").hidden = false; $("empty").innerHTML = html; $("content").hidden = true; }
+
+// --- controls ----------------------------------------------------------------
+
+function availableStats(){
+  const present = new Set();
+  for(const r of state.data.records) for(const k in r.benchmarks)
+    for(const s in r.benchmarks[k]) present.add(s);
+  return STATS.filter(s => present.has(s.key));
+}
+
+function buildTabs(){
+  const nav = $("tabs"); nav.textContent = "";
+  for(const [key, label] of PAGES){
+    const b = el("button"); b.textContent = label; b.dataset.page = key;
+    b.addEventListener("click", () => { state.page = key; onControlChange(); });
+    nav.appendChild(b);
+  }
+}
+
+function buildStatSeg(){
+  const stats = availableStats();
+  if(!stats.some(s => s.key === state.stat))
+    state.stat = stats.some(s => s.key === "instructions") ? "instructions" : (stats[0] ? stats[0].key : "time");
+  const seg = $("statSeg"); seg.textContent = "";
+  for(const s of stats){
+    const b = el("button"); b.textContent = s.label; b.dataset.stat = s.key;
+    b.addEventListener("click", () => { state.stat = s.key; onControlChange(); });
+    seg.appendChild(b);
+  }
+}
+
+function buildRangeSeg(){
+  const seg = $("rangeSeg"); seg.textContent = "";
+  for(const r of RANGES){
+    const b = el("button"); b.textContent = r.label; b.dataset.range = r.key;
+    b.addEventListener("click", () => { state.range = r.key; state.from = ""; state.to = ""; onControlChange(); });
+    seg.appendChild(b);
+  }
+}
+
+function initDates(){
+  const recs = state.data.records;
+  const iso = u => new Date(u*1000).toISOString().slice(0,10);
+  const min = iso(recs[0].date_unix || 0), max = iso(recs[recs.length-1].date_unix || 0);
+  for(const id of ["dFrom","dTo"]){ $(id).min = min; $(id).max = max; }
+  const onDate = () => {
+    state.from = $("dFrom").value; state.to = $("dTo").value;
+    state.range = (state.from || state.to) ? "custom" : "all";
+    onControlChange();
+  };
+  $("dFrom").addEventListener("change", onDate);
+  $("dTo").addEventListener("change", onDate);
+}
+
+function syncControls(){
+  document.body.dataset.page = state.page;
+  for(const b of $("tabs").children) b.ariaPressed = b.dataset.page === state.page;
+  for(const b of $("statSeg").children) b.ariaPressed = b.dataset.stat === state.stat;
+  for(const b of $("rangeSeg").children) b.ariaPressed = b.dataset.range === state.range;
+  $("vPct").ariaPressed = state.view === "pct";
+  $("vAbs").ariaPressed = state.view === "abs";
+  if($("dFrom").value !== state.from) $("dFrom").value = state.from;
+  if($("dTo").value !== state.to) $("dTo").value = state.to;
+  if($("search").value !== state.q) $("search").value = state.q;
+}
+
+function onControlChange(){ syncControls(); writeHash(); rebuild(); }
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, SHA_RE = /^[0-9a-f]{7,40}$/;
+function readHash(){
+  const p = new URLSearchParams(location.hash.slice(1));
+  if(PAGES.some(pg => pg[0] === p.get("page"))) state.page = p.get("page");
+  if(p.get("stat")) state.stat = p.get("stat");
+  if(p.get("view") === "abs") state.view = "abs";
+  if(RANGES.some(r => r.key === p.get("range"))) state.range = p.get("range");
+  if(DATE_RE.test(p.get("from") || "")) { state.from = p.get("from"); state.range = "custom"; }
+  if(DATE_RE.test(p.get("to") || "")) { state.to = p.get("to"); state.range = "custom"; }
+  if(p.get("q")) state.q = p.get("q");
+  if(SHA_RE.test(p.get("before") || "")) state.before = p.get("before");
+  if(SHA_RE.test(p.get("after") || "")) state.after = p.get("after");
+  if(p.get("fs")) state.fs = p.get("fs");
+}
+function writeHash(){
+  const p = new URLSearchParams();
+  p.set("page", state.page); p.set("stat", state.stat);
+  p.set("view", state.view); p.set("range", state.range);
+  if(state.from) p.set("from", state.from);
+  if(state.to) p.set("to", state.to);
+  if(state.q) p.set("q", state.q);
+  if(state.before) p.set("before", state.before);
+  if(state.after) p.set("after", state.after);
+  if(state.fs) p.set("fs", state.fs);
+  history.replaceState(null, "", "#" + p.toString());
+}
+
+$("vPct").addEventListener("click", () => { state.view = "pct"; onControlChange(); });
+$("vAbs").addEventListener("click", () => { state.view = "abs"; onControlChange(); });
+let qTimer;
+$("search").addEventListener("input", e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { state.q = e.target.value.trim(); writeHash(); rebuild(); }, 150);
+});
+
+// --- series building ---------------------------------------------------------
+
+function visibleRecords(){
+  const recs = state.data.records;
+  if(state.range === "custom"){
+    const lo = state.from ? Date.parse(state.from + "T00:00:00Z")/1000 : -Infinity;
+    const hi = state.to ? Date.parse(state.to + "T23:59:59Z")/1000 : Infinity;
+    return recs.filter(r => (r.date_unix||0) >= lo && (r.date_unix||0) <= hi);
+  }
+  const days = (RANGES.find(r => r.key === state.range) || RANGES[0]).days;
+  if(!isFinite(days)) return recs;
+  const last = recs[recs.length-1].date_unix || 0;
+  return recs.filter(r => (r.date_unix||0) >= last - days*86400);
+}
+
+// Benchmarks that still exist at the newest commit — deleted ones were
+// removed for a reason, so they are not shown anywhere.
+function currentKeys(){
+  const all = state.data.records;
+  return Object.keys(all[all.length-1].benchmarks).sort();
+}
+
+function filteredKeys(){
+  const q = state.q.toLowerCase();
+  return currentKeys().filter(k => !q || k.toLowerCase().includes(q));
+}
+
+// Per-benchmark values for the current stat over `recs`; null where absent.
+function seriesFor(recs, key){
+  const vals = recs.map(r => {
+    const b = hasOwn(r.benchmarks, key) ? r.benchmarks[key] : null;
+    const v = b ? b[state.stat] : null;
+    return (typeof v === "number" && isFinite(v)) ? v : null;
+  });
+  let base = null, last = null;
+  for(const v of vals){ if(v != null){ if(base == null) base = v; last = v; } }
+  return { vals, base, last };
+}
+
+const toPct = (vals, base) => vals.map(v => (v != null && base > 0) ? (v/base - 1) * 100 : null);
+
+// Geomean of per-benchmark ratios (vs each one's first value in range), as % change.
+function overviewSeries(recs, series){
+  return recs.map((_, i) => {
+    let logSum = 0, n = 0;
+    for(const s of series){
+      const v = s.vals[i];
+      if(v != null && s.base > 0){ logSum += Math.log(v / s.base); n++; }
     }
-    host.appendChild(box);
+    return n ? (Math.exp(logSum / n) - 1) * 100 : null;
+  });
+}
+
+// Indices where a release was tagged / the measurement regime changed.
+function markerIndices(recs){
+  const rel = [], env = [];
+  for(let i = 0; i < recs.length; i++){
+    if(state.releasesBySha[recs[i].commit]) rel.push(i);
+    if(i > 0 && regimeKey(recs[i]) !== regimeKey(recs[i-1])) env.push(i);
+  }
+  return { rel, env };
+}
+
+function statValue(rec, key){
+  const b = hasOwn(rec.benchmarks, key) ? rec.benchmarks[key] : null;
+  const v = b ? b[state.stat] : null;
+  return (typeof v === "number" && isFinite(v)) ? v : null;
+}
+
+// --- page dispatch -----------------------------------------------------------
+
+let observer = null, roTimer = null;
+
+function teardown(){
+  closeModal(false);
+  for(const c of state.cards) if(c.chart) c.chart.destroy();
+  if(state.overview && state.overview.chart) state.overview.chart.destroy();
+  state.cards = []; state.overview = null;
+  if(observer) observer.disconnect();
+  observer = new IntersectionObserver(onIntersect, { rootMargin: "300px 0px" });
+}
+
+function rebuild(){
+  teardown();
+  const host = $("content"); host.textContent = ""; host.hidden = false; $("empty").hidden = true;
+  if(state.page === "compare") return renderComparePage(host);
+  if(state.page === "commits") return renderCommitsPage(host);
+  renderGraphsPage(host);
+}
+
+// --- graphs page -------------------------------------------------------------
+
+function renderGraphsPage(host){
+  const recs = visibleRecords();
+  if(recs.length === 0) return showEmpty("No records in this time range.");
+  const xs = recs.map(r => r.date_unix != null ? r.date_unix : Date.parse(r.date)/1000);
+  const series = [];
+  for(const k of filteredKeys()){
+    const s = seriesFor(recs, k);
+    if(s.base != null) series.push(Object.assign(s, { key: k }));
+  }
+  if(series.length === 0)
+    return showEmpty(state.q ? "No benchmarks match the filter." : "No data for this statistic in this range.");
+  const markers = markerIndices(recs);
+  state.ctx = { recs, xs, markers, byKey: new Map(series.map(s => [s.key, s])) };
+
+  host.appendChild(renderOverview(recs, xs, series, markers));
+  if(markers.env.length){
+    const n = el("div","ov-note");
+    n.textContent = markers.env.length + " environment change" + (markers.env.length>1?"s":"") +
+      " in range (dotted lines) — values across them are not directly comparable";
+    host.appendChild(n);
+  }
+
+  // Group by "prefix/" of the benchmark key; ungrouped keys come first.
+  const groups = new Map();
+  for(const s of series){
+    const g = s.key.includes("/") ? s.key.slice(0, s.key.indexOf("/")) : "";
+    if(!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(s);
+  }
+  for(const g of [...groups.keys()].sort((a,b) => (b==="")-(a==="") || (a<b?-1:1))){
+    const sec = el("section","group");
+    if(g){ const h = el("h2"); h.textContent = g; sec.appendChild(h); }
+    const grid = el("div","grid");
+    for(const s of groups.get(g)) grid.appendChild(renderCard(recs, xs, s, markers));
+    sec.appendChild(grid);
+    host.appendChild(sec);
+  }
+  if(state.fs && state.ctx.byKey.has(state.fs)) openModal(state.fs);
+  else if(state.fs){ state.fs = ""; writeHash(); }
+}
+
+function renderOverview(recs, xs, series, markers){
+  const box = el("section","card overview");
+  const ys = overviewSeries(recs, series);
+  let lastPct = null;
+  for(const v of ys) if(v != null) lastPct = v;
+
+  const ro = el("div","readout");
+  const big = el("div","big mono");
+  big.textContent = lastPct == null ? "—" : fmtPct(lastPct);
+  if(lastPct != null && Math.abs(lastPct) >= CHIP_EPS) big.classList.add(lastPct > 0 ? "bad" : "good");
+  const what = el("div","what");
+  what.textContent = statDef().label.toLowerCase() + ", geomean of " + series.length +
+                     " benchmark" + (series.length>1?"s":"");
+  const since = el("div","since");
+  since.textContent = "vs " + (recs[0].date || "").slice(0,10) + " · " + recs.length + " commits";
+  ro.append(big, what, since);
+
+  const wrap = el("div","ov-chart"); const plot = el("div","plot");
+  wrap.appendChild(plot); box.append(ro, wrap);
+  state.overview = { kind: "overview", plotEl: plot, recs, xs, ys, markers, chart: null };
+  observer.observe(plot);
+  return box;
+}
+
+function renderCard(recs, xs, s, markers){
+  const card = el("div","card bench");
+  const head = el("div","bench-head");
+  const name = el("span","name mono"); name.textContent = shortName(s.key); name.title = s.key;
+  head.append(name, deltaChip(s), fullscreenBtn(s.key));
+  const val = el("span","val mono"); val.textContent = fmtAbs(s.last);
+  head.insertBefore(val, head.lastChild);
+  const plot = el("div","plot");
+  card.append(head, plot);
+  const c = { kind: "bench", key: s.key, plotEl: plot, recs, xs, base: s.base,
+              ys: state.view === "pct" ? toPct(s.vals, s.base) : s.vals, markers, chart: null };
+  state.cards.push(c); plot.dataset.card = String(state.cards.length - 1);
+  observer.observe(plot);
+  return card;
+}
+
+function deltaChip(s){
+  const chip = el("span","chip mono");
+  const pct = (s.base > 0 && s.last != null) ? (s.last/s.base - 1) * 100 : null;
+  if(pct == null || Math.abs(pct) < CHIP_EPS){ chip.classList.add("flat"); chip.textContent = pct == null ? "—" : "· " + fmtPct(pct); }
+  else if(pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(pct); }
+  else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(pct); }
+  chip.title = "vs start of range";
+  return chip;
+}
+
+function fullscreenBtn(key){
+  const b = el("button","fsbtn"); b.textContent = "⛶"; b.title = "Expand chart";
+  b.setAttribute("aria-label", "Expand chart for " + key);
+  b.addEventListener("click", e => { e.stopPropagation(); openModal(key); });
+  return b;
+}
+
+function onIntersect(entries){
+  for(const e of entries){
+    if(!e.isIntersecting) continue;
+    observer.unobserve(e.target);
+    if(state.overview && e.target === state.overview.plotEl) initChart(state.overview);
+    else { const c = state.cards[Number(e.target.dataset.card)]; if(c) initChart(c); }
   }
 }
 
-function renderReleases(){
-  const rels = state.data.releases;
-  if(!rels || !rels.length) return;
-  $("releases").hidden = false;
-  const host = $("releaselist"); host.textContent = "";
-  for(const rel of rels.slice().reverse()){
-    const url = commitURL(rel.commit);
-    const a = el("a"); a.textContent = rel.tag + "  ·  " + (rel.commit||"").slice(0,7);
-    if(url){ a.href = url; a.target = "_blank"; a.rel = "noopener"; } else { a.removeAttribute("href"); }
-    host.appendChild(a);
-  }
+// --- fullscreen modal --------------------------------------------------------
+
+function openModal(key){
+  closeModal(false);
+  const s = state.ctx && state.ctx.byKey.get(key);
+  if(!s) return;
+  const { recs, xs, markers } = state.ctx;
+  const overlay = el("div","overlay");
+  const modal = el("div","card modal");
+  const head = el("div","modal-head");
+  const name = el("span","name mono"); name.textContent = s.key;
+  const val = el("span","val mono"); val.textContent = fmtAbs(s.last);
+  const close = el("button","close"); close.textContent = "✕"; close.setAttribute("aria-label","Close");
+  close.addEventListener("click", () => closeModal(true));
+  head.append(name, deltaChip(s), val, close);
+  const plot = el("div","plot");
+  modal.append(head, plot); overlay.appendChild(modal);
+  overlay.addEventListener("click", e => { if(e.target === overlay) closeModal(true); });
+  document.body.appendChild(overlay);
+  const c = { kind: "bench", labeled: true, key: s.key, plotEl: plot, recs, xs, base: s.base,
+              ys: state.view === "pct" ? toPct(s.vals, s.base) : s.vals, markers, chart: null };
+  state.modal = { overlay, c, key };
+  initChart(c);
+  close.focus();
+  state.fs = key; writeHash();
 }
 
-// Fingerprint identity of a record's measurement regime (CPU/OS/Julia/threads/suite).
-function regimeKey(r){
-  const f = r.fingerprint || {};
-  return [f.os, f.arch, f.julia, f.cpu, f.threads, f.suite].join("|");
+function closeModal(updateHash){
+  if(!state.modal) return;
+  if(state.modal.c.chart) state.modal.c.chart.destroy();
+  state.modal.overlay.remove();
+  state.modal = null;
+  if(updateHash){ state.fs = ""; writeHash(); }
 }
 
-// Vertical dashed lines at release commits, drawn under the series.
-function releasePlugin(){
-  return { hooks: { drawClear: u => {
-    const recs = state.data.records, ctx = u.ctx;
-    ctx.save(); ctx.strokeStyle = getVar("--release"); ctx.fillStyle = getVar("--release");
-    ctx.setLineDash([3,3]); ctx.lineWidth = 1; ctx.font = "10px sans-serif";
-    for(let i=0;i<recs.length;i++){ const tag = state.releasesBySha[recs[i].commit]; if(!tag) continue;
-      const x = Math.round(u.valToPos(u.data[0][i], "x", true));
-      if(x < u.bbox.left || x > u.bbox.left+u.bbox.width) continue;
-      ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top+u.bbox.height); ctx.stroke();
-      ctx.fillText(tag, x+3, u.bbox.top+11);
+document.addEventListener("keydown", e => { if(e.key === "Escape") closeModal(true); });
+
+// --- compare page ------------------------------------------------------------
+
+function recBySha(sha){ return state.data.records.find(r => r.commit === sha) || null; }
+
+function defaultCompareShas(){
+  const recs = state.data.records;
+  const after = recs[recs.length-1].commit;
+  const rels = (state.data.releases || []).filter(r => r.commit && r.commit !== after && recBySha(r.commit));
+  const before = rels.length ? rels[rels.length-1].commit : recs[0].commit;
+  return { before, after };
+}
+
+function renderComparePage(host){
+  const recs = state.data.records;
+  const def = defaultCompareShas();
+  if(!state.before || !recBySha(state.before)) state.before = def.before;
+  if(!state.after || !recBySha(state.after)) state.after = def.after;
+
+  const bar = el("div","cmp-bar");
+  const mkSel = (which) => {
+    const sel = el("select");
+    sel.setAttribute("aria-label", which + " commit");
+    for(let i = recs.length-1; i >= 0; i--){
+      const r = recs[i];
+      const o = el("option"); o.value = r.commit;
+      const tag = state.releasesBySha[r.commit];
+      o.textContent = r.commit.slice(0,7) + "  " + (r.date||"").slice(0,10) +
+        (tag ? "  [" + tag + "]" : "") + "  " + (r.message||"").slice(0,42);
+      sel.appendChild(o);
     }
+    sel.value = state[which];
+    sel.addEventListener("change", () => { state[which] = sel.value; onControlChange(); });
+    return sel;
+  };
+  const lb = el("label"); lb.textContent = "before";
+  const la = el("label"); la.textContent = "after";
+  const swap = el("button","swap"); swap.textContent = "⇄"; swap.title = "Swap commits";
+  swap.addEventListener("click", () => {
+    const t = state.before; state.before = state.after; state.after = t; onControlChange();
+  });
+  bar.append(lb, mkSel("before"), swap, la, mkSel("after"));
+  host.appendChild(bar);
+
+  const rb = recBySha(state.before), ra = recBySha(state.after);
+  const q = state.q.toLowerCase();
+  const keys = Object.keys(ra.benchmarks).sort().filter(k => !q || k.toLowerCase().includes(q));
+  const rows = [];
+  let logSum = 0, n = 0, worse = 0, better = 0;
+  for(const k of keys){
+    const va = statValue(ra, k), vb = statValue(rb, k);
+    const pct = (vb > 0 && va != null) ? (va/vb - 1) * 100 : null;
+    if(pct != null){ logSum += Math.log(va/vb); n++;
+      if(pct >= CHIP_EPS) worse++; else if(pct <= -CHIP_EPS) better++; }
+    rows.push({ key: k, vb, va, pct });
+  }
+  if(rows.length === 0)
+    return host.appendChild(Object.assign(el("div","empty"), { textContent: "No benchmarks match." }));
+  rows.sort((a,b) => (b.pct == null) - (a.pct == null) || (b.pct||0) - (a.pct||0));
+
+  const sum = el("div","card cmp-summary");
+  const g = n ? (Math.exp(logSum/n) - 1) * 100 : null;
+  const big = el("span","big mono"); big.textContent = fmtPct(g);
+  if(g != null && Math.abs(g) >= CHIP_EPS) big.classList.add(g > 0 ? "bad" : "good");
+  const lbl = el("span","lbl");
+  lbl.textContent = statDef().label.toLowerCase() + " geomean · " + n + " benchmarks · " +
+    worse + " regressed · " + better + " improved (≥" + CHIP_EPS + "%)";
+  sum.append(big, lbl);
+  if(regimeKey(rb) !== regimeKey(ra)){
+    const warn = el("span","lbl"); warn.style.color = getVar("--bad");
+    warn.textContent = "⚠ different measurement environments — not directly comparable";
+    sum.appendChild(warn);
+  }
+  host.appendChild(sum);
+
+  const wrap = el("div","card"); wrap.style.overflow = "hidden";
+  const tbl = el("table","cmp");
+  const thead = el("thead"); const trh = el("tr");
+  const mkTh = (txt, cls) => { const th = el("th", cls); th.textContent = txt; return th; };
+  trh.append(mkTh("Benchmark"),
+             mkTh(state.before.slice(0,7) + " · " + (rb.date||"").slice(0,10), "num"),
+             mkTh(state.after.slice(0,7) + " · " + (ra.date||"").slice(0,10), "num"),
+             mkTh("Δ", "num"));
+  thead.appendChild(trh); tbl.appendChild(thead);
+  const tbody = el("tbody");
+  for(const r of rows){
+    const tr = el("tr");
+    const tdk = el("td","key"); tdk.textContent = r.key;
+    const tdb = el("td","num mono"); tdb.textContent = fmtAbs(r.vb);
+    const tda = el("td","num mono"); tda.textContent = fmtAbs(r.va);
+    const tdd = el("td","num");
+    const chip = el("span","chip mono");
+    if(r.pct == null){ chip.classList.add("flat"); chip.textContent = r.vb == null ? "new" : "—"; }
+    else if(Math.abs(r.pct) < CHIP_EPS){ chip.classList.add("flat"); chip.textContent = "· " + fmtPct(r.pct); }
+    else if(r.pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(r.pct); }
+    else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(r.pct); }
+    tdd.appendChild(chip);
+    tr.append(tdk, tdb, tda, tdd);
+    tbody.appendChild(tr);
+  }
+  tbl.appendChild(tbody); wrap.appendChild(tbl); host.appendChild(wrap);
+}
+
+// --- commits page ------------------------------------------------------------
+
+function renderCommitsPage(host){
+  const recs = visibleRecords();
+  if(recs.length === 0) return showEmpty("No records in this time range.");
+  const q = state.q.toLowerCase();
+  const keys = currentKeys().filter(k => !q || k.toLowerCase().includes(q));
+
+  const hint = el("div","tl-hint");
+  hint.textContent = "Δ is the " + statDef().label.toLowerCase() +
+    " geomean vs the previous benchmarked commit" + (state.q ? " (filtered benchmarks)" : "") +
+    " — click a commit to compare it against its predecessor.";
+  host.appendChild(hint);
+
+  const list = el("div","card timeline");
+  for(let i = recs.length-1; i >= 0; i--){
+    const r = recs[i], prev = i > 0 ? recs[i-1] : null;
+    const row = el("div","commit");
+    const date = el("span","date"); date.textContent = (r.date||"").slice(0,10);
+    const sha = el("a","sha"); sha.textContent = (r.commit||"").slice(0,7);
+    const url = commitURL(r.commit);
+    if(url){ sha.href = url; sha.target = "_blank"; sha.rel = "noopener";
+             sha.addEventListener("click", e => e.stopPropagation()); }
+    const msg = el("span","msg"); msg.textContent = r.message || ""; msg.title = r.message || "";
+    row.append(date, sha, msg);
+    const tag = state.releasesBySha[r.commit];
+    if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; row.appendChild(t); }
+    if(prev && regimeKey(prev) !== regimeKey(r)){
+      const t = el("span","chip flat"); t.textContent = "env"; t.title = "measurement environment changed";
+      row.appendChild(t);
+    }
+    row.appendChild(el("span","spacer"));
+    let pct = null;
+    if(prev){
+      let logSum = 0, n = 0;
+      for(const k of keys){
+        const va = statValue(r, k), vb = statValue(prev, k);
+        if(va != null && vb > 0){ logSum += Math.log(va/vb); n++; }
+      }
+      if(n) pct = (Math.exp(logSum/n) - 1) * 100;
+    }
+    const chip = el("span","chip mono");
+    if(pct == null){ chip.classList.add("flat"); chip.textContent = "—"; }
+    else if(Math.abs(pct) < CHIP_EPS){ chip.classList.add("flat"); chip.textContent = "· " + fmtPct(pct); }
+    else if(pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(pct); }
+    else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(pct); }
+    row.appendChild(chip);
+    if(prev){
+      row.addEventListener("click", () => {
+        state.before = prev.commit; state.after = r.commit; state.page = "compare"; onControlChange();
+        window.scrollTo(0, 0);
+      });
+    } else { row.style.cursor = "default"; }
+    list.appendChild(row);
+  }
+  host.appendChild(list);
+}
+
+// --- charts ------------------------------------------------------------------
+
+function initChart(c){
+  if(c.chart) return;
+  const isOverview = c.kind === "overview";
+  const labeled = isOverview || c.labeled;
+  const pctMode = isOverview || state.view === "pct";
+  const fmtY = pctMode ? fmtPct : fmtAbs;
+  const axisFont = "10.5px ui-monospace, Menlo, Consolas, monospace";
+  const w = c.plotEl.clientWidth || 320, h = c.plotEl.clientHeight || 130;
+  const opts = {
+    width: w, height: h, legend: { show: false }, pxAlign: 1,
+    cursor: { sync: { key: SYNC_KEY, setSeries: false }, points: { size: 6 },
+              drag: { x: false, y: false } },
+    scales: { x: { time: true } },
+    series: [ {}, {
+      stroke: getVar("--series"), width: 1.5, spanGaps: true, points: { show: false },
+      fill: pctMode ? undefined : getVar("--series-soft"),
+    } ],
+    axes: [
+      { stroke: getVar("--faint"), font: axisFont, size: 26, space: 80,
+        grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 } },
+      { stroke: getVar("--faint"), font: axisFont, size: autoAxisSize,
+        space: labeled ? 34 : 30, gap: 4,
+        grid: { stroke: getVar("--grid"), width: 1 }, ticks: { show: false },
+        values: (u, vals) => vals.map(fmtY) },
+    ],
+    plugins: [ markerPlugin(c, labeled), zeroLinePlugin(pctMode), hoverPlugin(c) ],
+  };
+  c.chart = new uPlot(opts, [c.xs, c.ys], c.plotEl);
+  c.plotEl.querySelector(".u-over").addEventListener("click", () => {
+    const idx = c.chart.cursor.idx; if(idx == null) return;
+    const url = commitURL(c.recs[idx].commit); if(url) window.open(url, "_blank", "noopener");
+  });
+}
+
+// Fit the y axis to its widest tick label (fixed widths clip e.g. "20.8 ms").
+function autoAxisSize(u, values, axisIdx, cycleNum){
+  const axis = u.axes[axisIdx];
+  if(cycleNum > 1) return axis._size;
+  let size = axis.gap + 4;
+  const longest = (values || []).reduce((a,b) => (a.length > b.length ? a : b), "");
+  if(longest !== ""){
+    u.ctx.font = axis.font[0];
+    size += u.ctx.measureText(longest).width / devicePixelRatio;
+  }
+  return Math.ceil(size);
+}
+
+// Vertical annotation lines: releases (dashed, labeled on large charts) and
+// measurement-regime changes (dotted) — regime changes can look like perf changes.
+function markerPlugin(c, labeled){
+  return { hooks: { draw: u => {
+    const ctx = u.ctx;
+    ctx.save();
+    const draw = (idxs, color, dash, label) => {
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.setLineDash(dash); ctx.lineWidth = 1;
+      ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
+      for(const i of idxs){
+        const x = Math.round(u.valToPos(u.data[0][i], "x", true));
+        if(x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+        ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top + u.bbox.height); ctx.stroke();
+        if(labeled && label) ctx.fillText(label(i), x + 4, u.bbox.top + 10);
+      }
+    };
+    draw(c.markers.env, getVar("--faint"), [1,3], labeled ? (() => "env") : null);
+    draw(c.markers.rel, getVar("--release"), [4,3],
+         labeled ? (i => state.releasesBySha[c.recs[i].commit] || "") : null);
     ctx.restore();
   } } };
 }
 
-// Dotted grey lines where the measurement regime (fingerprint) changed, so a
-// CPU/Julia/suite change is not mistaken for a performance change.
-function regimePlugin(){
-  return { hooks: { drawClear: u => {
-    const recs = state.data.records, ctx = u.ctx;
-    ctx.save(); ctx.strokeStyle = getVar("--muted"); ctx.fillStyle = getVar("--muted");
-    ctx.setLineDash([1,3]); ctx.lineWidth = 1; ctx.font = "10px sans-serif";
-    for(let i=1;i<recs.length;i++){ if(regimeKey(recs[i]) === regimeKey(recs[i-1])) continue;
-      const x = Math.round(u.valToPos(u.data[0][i], "x", true));
-      if(x < u.bbox.left || x > u.bbox.left+u.bbox.width) continue;
-      ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top+u.bbox.height); ctx.stroke();
-      ctx.fillText("env", x+3, u.bbox.top+u.bbox.height-4);
-    }
+// Solid baseline at 0 in percent mode (when 0 is inside the y range).
+function zeroLinePlugin(pctMode){
+  return { hooks: { draw: u => {
+    if(!pctMode) return;
+    const sc = u.scales.y;
+    if(sc.min == null || sc.min > 0 || sc.max < 0) return;
+    const y = Math.round(u.valToPos(0, "y", true));
+    const ctx = u.ctx;
+    ctx.save(); ctx.strokeStyle = getVar("--faint"); ctx.lineWidth = 1; ctx.setLineDash([]);
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath(); ctx.moveTo(u.bbox.left, y); ctx.lineTo(u.bbox.left + u.bbox.width, y); ctx.stroke();
     ctx.restore();
   } } };
 }
 
-function getVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-
-function tooltipPlugin(){
+function hoverPlugin(c){
   const tt = $("tooltip");
   return { hooks: {
     setCursor: u => {
+      if(!u.over.matches(":hover")){ return; }
       const idx = u.cursor.idx;
       if(idx == null || u.cursor.left < 0){ tt.style.display = "none"; return; }
-      const r = state.data.records[idx];
+      const r = c.recs[idx];
       tt.textContent = "";
-      const head = el("div","sha"); head.textContent = r.commit.slice(0,7) + " · " + (r.date||"").slice(0,10);
-      tt.appendChild(head);
+      const head = el("div","sha");
+      head.textContent = (r.commit || "").slice(0,7) + " · " + (r.date || "").slice(0,10);
       const tag = state.releasesBySha[r.commit];
-      if(tag){ const t = el("div","tag"); t.textContent = "release " + tag; tt.appendChild(t); }
-      const msg = el("div","msg"); msg.textContent = r.message || ""; tt.appendChild(msg);
-      const f = r.fingerprint || {};
-      if(f.julia || f.cpu){ const fpd = el("div","sha"); fpd.textContent = [f.cpu, f.julia && ("Julia "+f.julia)].filter(Boolean).join(" · "); tt.appendChild(fpd); }
-      for(let s=1;s<u.series.length;s++){
-        const ser = u.series[s]; if(ser.show === false) continue;
-        const v = u.data[s][idx];
-        const row = el("div","row");
-        const left = el("span"); const sw = el("span","sw"); sw.style.background = ser.stroke();
-        left.appendChild(sw); left.appendChild(document.createTextNode(ser.label));
-        const right = el("span"); right.textContent = fmt(v);
-        row.appendChild(left); row.appendChild(right); tt.appendChild(row);
+      if(tag){ const t = el("span","tag"); t.textContent = tag; head.appendChild(t); }
+      tt.appendChild(head);
+      if(r.message){ const m = el("div","msg"); m.textContent = r.message; tt.appendChild(m); }
+      const row = el("div","num");
+      if(c.kind === "overview"){
+        row.textContent = "geomean " + fmtPct(c.ys[idx]);
+      } else {
+        const v = statValue(r, c.key);
+        row.append(shortName(c.key) + ": " + fmtAbs(v));
+        const pv = (c.base > 0 && v != null) ? (v/c.base - 1)*100 : null;
+        if(pv != null){
+          const d = el("span","delta " + (Math.abs(pv) < CHIP_EPS ? "" : pv > 0 ? "bad" : "good"));
+          d.textContent = "  " + fmtPct(pv) + " vs start";
+          row.append(d);
+        }
       }
-      const rect = u.over.getBoundingClientRect(), main = u.root.parentNode.getBoundingClientRect();
+      tt.appendChild(row);
       tt.style.display = "block";
-      let left = rect.left - main.left + u.cursor.left + 14;
-      if(left + tt.offsetWidth > main.width) left -= tt.offsetWidth + 28;
-      tt.style.left = left + "px";
-      tt.style.top = (rect.top - main.top + Math.max(0,u.cursor.top) - 10) + "px";
-    }
+      const rect = u.over.getBoundingClientRect();
+      let left = rect.left + u.cursor.left + 14;
+      if(left + tt.offsetWidth > window.innerWidth - 8) left = rect.left + u.cursor.left - tt.offsetWidth - 14;
+      let top = rect.top + Math.max(0, u.cursor.top) - 10;
+      if(top + tt.offsetHeight > window.innerHeight - 8) top = window.innerHeight - tt.offsetHeight - 8;
+      tt.style.left = Math.max(8, left) + "px"; tt.style.top = Math.max(8, top) + "px";
+    },
   } };
 }
 
-function redraw(){
-  if(!state.data) return;
-  $("empty").hidden = true; $("chart").hidden = false;
-  const recs = state.data.records;
-  let regimes = 0;
-  for(let i=1;i<recs.length;i++) if(regimeKey(recs[i]) !== regimeKey(recs[i-1])) regimes++;
-  const hints = [];
-  if(state.selected.size > 1) hints.push("use log scale to compare different magnitudes");
-  if(regimes > 0) hints.push(regimes + " environment change" + (regimes>1?"s":"") + " (dotted “env” lines) — points across them are not directly comparable");
-  $("hint").textContent = hints.join(" · ");
-  // Prefer the unix commit time (timezone-independent); fall back to parsing the
-  // ISO string for older records that predate that field.
-  const xs = recs.map(r => (r.date_unix != null ? r.date_unix : Date.parse(r.date)/1000));
-  const keys = state.keys.filter(k => state.selected.has(k));
-  const series = [{}];
-  const data = [xs];
-  keys.forEach((k,i) => {
-    data.push(recs.map(r => (r.benchmarks[k] && r.benchmarks[k][state.metric] != null) ? r.benchmarks[k][state.metric] : null));
-    series.push({ label: k, stroke: PALETTE[i % PALETTE.length], width: 1.5,
-                  points: { size: 4 }, spanGaps: true, value: (u,v) => fmt(v) });
-  });
-  const c = $("chart");
-  if(state.chart){ state.chart.destroy(); state.chart = null; }
-  if(!keys.length){ $("hint").textContent = "Select a benchmark on the left."; return; }
-  const opts = {
-    width: c.clientWidth || 800, height: Math.max(360, window.innerHeight - 180),
-    scales: { y: { distr: state.log ? 3 : 1 } },
-    axes: [ axisStyle({}), axisStyle({ values: (u,vals) => vals.map(v => fmt(v)) }) ],
-    series, plugins: [ regimePlugin(), releasePlugin(), tooltipPlugin() ],
-    cursor: { points: { size: 6 } },
-  };
-  state.chart = new uPlot(opts, data, c);
-  c.querySelector(".u-over").addEventListener("click", () => {
-    const idx = state.chart.cursor.idx; if(idx == null) return;
-    const url = commitURL(recs[idx].commit); if(url) window.open(url, "_blank", "noopener");
-  });
-}
+document.addEventListener("mouseout", e => {
+  if(!e.relatedTarget) $("tooltip").style.display = "none";
+});
+document.addEventListener("mousemove", e => {
+  if(!e.target.closest || !e.target.closest(".u-over")) $("tooltip").style.display = "none";
+});
 
-function axisStyle(extra){
-  const stroke = getVar("--muted"), grid = getVar("--line");
-  return Object.assign({ stroke, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid } }, extra);
-}
-
-// Controls
-$("search").addEventListener("input", e => { state.search = e.target.value; renderSidebar(); });
-function setMetric(m){ state.metric = m; $("mTime").ariaPressed = m==="time"; $("mMem").ariaPressed = m==="memory"; redraw(); }
-$("mTime").addEventListener("click", () => setMetric("time"));
-$("mMem").addEventListener("click", () => setMetric("memory"));
-$("scale").addEventListener("click", () => { state.log = !state.log; $("scale").ariaPressed = state.log; redraw(); });
-window.addEventListener("resize", () => { if(state.chart) redraw(); });
-// Re-theme uPlot when the system theme changes (CSS vars change; redraw picks them up).
-if(window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => redraw());
+window.addEventListener("resize", () => {
+  clearTimeout(roTimer);
+  roTimer = setTimeout(() => {
+    const all = [state.overview, ...state.cards, state.modal && state.modal.c].filter(Boolean);
+    for(const c of all) if(c.chart)
+      c.chart.setSize({ width: c.plotEl.clientWidth, height: c.plotEl.clientHeight });
+  }, 100);
+});
+if(window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rebuild);
 
 load();
 </script>
