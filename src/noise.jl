@@ -45,13 +45,13 @@ end
 # Julia version, thread count, and measurement backend (perf syscalls in the
 # timed window vs plain clocks shift small benchmarks). CPU is deliberately
 # excluded — it varies within a hosted-runner class and that variation is
-# exactly the jitter we want to learn. Old records without a backend field get
-# "", so histories recorded before the field existed match only comparisons
-# that also lack it.
+# exactly the jitter we want to learn. Records from before the backend field
+# existed were always time-measured, so a missing backend reads as "time" and
+# old histories keep informing time-backend comparisons.
 _regime(fp) = fp isa AbstractDict ?
     (string(get(fp, "os", "")), string(get(fp, "arch", "")), string(get(fp, "julia", "")),
-        string(get(fp, "threads", "")), string(get(fp, "backend", ""))) :
-    ("", "", "", "", "")
+        string(get(fp, "threads", "")), string(get(fp, "backend", "time"))) :
+    ("", "", "", "", "time")
 
 """
     build_noise_from_history(records; regime=nothing, min_samples=5, factor=3.0, cap=0.5) -> NoiseModel

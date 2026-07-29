@@ -184,8 +184,10 @@ runs:
           using Pkg
           Pkg.activate(; temp = true)
           # Odometer is not registered yet; fetch it by URL so Tachometer(dev)
-          # can resolve. Drop this line once Odometer is in General.
-          Pkg.add(url = "https://github.com/KristofferC/Odometer.jl")
+          # can resolve — pin rev to a tag/commit for reproducible CI numbers.
+          # Drop this line once Odometer is in General (the [compat] bound in
+          # Tachometer applies either way).
+          Pkg.add(url = "https://github.com/KristofferC/Odometer.jl", rev = "main")
           Pkg.develop(PackageSpec(path = ENV["TACHO_PATH"]))
           Pkg.instantiate()
           using Tachometer

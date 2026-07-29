@@ -39,12 +39,15 @@ struct RevisionRun
     estimates::Dict{String, Estimate}
     script_hash::String
     backend::String         # backend the results were measured with ("" when unknown)
+    threads::Int            # Threads.nthreads() reported by the measuring child
     ok::Bool
     log::String
 end
 
 RevisionRun(sha, dirty, estimates, script_hash, ok::Bool, log) =
-    RevisionRun(sha, dirty, estimates, script_hash, "", ok, log)
+    RevisionRun(sha, dirty, estimates, script_hash, "", 1, ok, log)
+RevisionRun(sha, dirty, estimates, script_hash, backend::AbstractString, ok::Bool, log) =
+    RevisionRun(sha, dirty, estimates, script_hash, backend, 1, ok, log)
 
 """
     resolve_backend(backend; valgrind = "valgrind") -> Symbol
@@ -234,9 +237,10 @@ function run_revision(
         envdir = mktempdir(; prefix = "tachometer_env_")
         prep = _write_prepare_driver(srcdir, script, envdir)
         push!(tmpfiles, prep)
+        strip_cpu_target = backend === :callgrind
         prepenv = copy(subenv)
         backend === :callgrind && (prepenv["JULIA_CPU_TARGET"] = Odometer.CALLGRIND_CPU_TARGET)
-        proc = _run_julia(setenv(_julia_cmd(prep), _envvec(prepenv)); stream, io, prefix)
+        proc = _run_julia(setenv(_julia_cmd(prep; strip_cpu_target), _envvec(prepenv)); stream, io, prefix)
         success(proc.code) ||
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
                 "environment preparation failed\n" * _tail(proc.log))
@@ -246,10 +250,12 @@ function run_revision(
         driver = _write_run_driver(srcdir, script, envdir, outfile, backend, verbose)
         push!(tmpfiles, driver)
         # The environment is applied to the *inner* julia command, so the extra
-        # variables `callgrind_cmd` adds on top survive.
+        # variables `callgrind_cmd` adds on top survive. The callgrind output
+        # directory lives inside envdir, which is removed in the finally below.
         cmd = if backend === :callgrind
             # A single GC thread keeps the simulated process deterministic and cheap.
-            Odometer.callgrind_cmd(setenv(_julia_cmd(driver, `--gcthreads=1`), _envvec(subenv)); valgrind)
+            Odometer.callgrind_cmd(setenv(_julia_cmd(driver, `--gcthreads=1`; strip_cpu_target), _envvec(subenv));
+                valgrind, outdir = mkpath(joinpath(envdir, "callgrind-out")))
         else
             setenv(_julia_cmd(driver), _envvec(subenv))
         end
@@ -261,11 +267,15 @@ function run_revision(
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
                 "subprocess produced no results file\n" * _tail(proc.log))
 
-        estimates, run_backend = _load_estimates(outfile)
-        run_backend == string(backend) ||
+        estimates, run_backend, run_threads = _load_estimates(outfile)
+        # An empty suite has no provenance to check; let the caller's normal
+        # "no benchmarks found" path report it.
+        if !isempty(estimates) && run_backend != string(backend)
             return RevisionRun(sha, dirty, Dict{String, Estimate}(), script_hash, false,
                 "requested backend `$backend` but results were measured with `$run_backend`")
-        return RevisionRun(sha, dirty, estimates, script_hash, run_backend, true, _tail(proc.log))
+        end
+        return RevisionRun(sha, dirty, estimates, script_hash,
+            isempty(estimates) ? string(backend) : run_backend, run_threads, true, _tail(proc.log))
     catch e
         return RevisionRun(sha, dirty, Dict{String, Estimate}(), "", false,
             "error while benchmarking $(_short(sha)): $(sprint(showerror, e))")
@@ -353,7 +363,35 @@ end
 
 # Use the full julia_cmd so a custom sysimage (-J) and similar flags survive.
 # The drivers activate their own temp project, so no --project here.
-_julia_cmd(driver, extra::Cmd = ``) = `$(Base.julia_cmd()) --startup-file=no $extra $driver`
+#
+# `strip_cpu_target` matters more than it looks: `Base.julia_cmd()` bakes in
+# `-C native`, and the command-line flag beats the JULIA_CPU_TARGET environment
+# variable — including in the workers `Pkg.precompile` spawns, which inherit
+# the parent's resolved target. For callgrind runs the multi-target string in
+# JULIA_CPU_TARGET must win (it is not legal as a plain `-C` execution flag),
+# or the prepare phase precompiles caches the simulated process cannot load and
+# the measure phase silently recompiles everything inside the simulator.
+function _julia_cmd(driver, extra::Cmd = ``; strip_cpu_target::Bool = false)
+    julia = Base.julia_cmd()
+    strip_cpu_target && (julia = Cmd(_strip_cpu_target(julia.exec)))
+    return `$julia --startup-file=no $extra $driver`
+end
+
+# Remove `-C x` / `-Cx` / `--cpu-target x` / `--cpu-target=x` from an argv.
+function _strip_cpu_target(exec::Vector{String})
+    out = String[]
+    skip = false
+    for a in exec
+        skip && (skip = false; continue)
+        if a == "-C" || a == "--cpu-target"
+            skip = true
+        elseif startswith(a, "-C") || startswith(a, "--cpu-target=")
+        else
+            push!(out, a)
+        end
+    end
+    return out
+end
 
 _envvec(env) = String[string(k) * "=" * string(v) for (k, v) in env]
 
@@ -394,13 +432,17 @@ function _load_estimates(file)
     group = Odometer.load(file)
     out = Dict{String, Estimate}()
     backend = ""
+    threads = 1
     for (ids, trial) in Odometer.leaves(group)
         key = join(_keypart.(ids), "/")
         m = minimum(trial)
         out[key] = Estimate(m.time, m.bytes, m.allocs, m.instructions)
         backend = string(trial.provenance.backend)
+        # The child's actual thread count, not the requested one: instruction
+        # judging must be gated on what really ran.
+        threads = max(threads, trial.provenance.threads)
     end
-    return out, backend
+    return out, backend, threads
 end
 
 # Group keys are often tuples like `("spatial-dim", 2)`; render those as

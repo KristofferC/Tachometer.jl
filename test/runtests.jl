@@ -169,6 +169,23 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         @test only(ms).verdict === :regression
         @test only(ms).reason === :multiple
 
+        # With counts judged, time demotes to the loose guard: +12% time with
+        # flat instructions is invariant at a 25% guard...
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, 100_000)), mkirun("g/a" => (11_200, 0, 0, 100_000));
+            time_guard = 0.25)
+        @test only(ms).verdict === :invariant
+        # ...but a benchmark with no counts in the same comparison keeps the
+        # full-strength time gate.
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, NaN)), mkirun("g/a" => (11_200, 0, 0, NaN));
+            time_guard = 0.25)
+        @test only(ms).verdict === :regression
+        @test only(ms).reason === :time
+        # A 2x time swing still trips the guard even with flat instructions.
+        ms = ij(mkirun("g/a" => (10_000, 0, 0, 100_000)), mkirun("g/a" => (20_000, 0, 0, 100_000));
+            time_guard = 0.25)
+        @test only(ms).verdict === :regression
+        @test only(ms).reason === :time
+
         # A pair with counts on only one side cannot confirm an instruction change.
         v, _ = _classify_instr([(Estimate(1.0, 0.0, 0.0), Estimate(1.0, 0.0, 0.0, 5e6))], 0.01, 1000.0, 1)
         @test v === :invariant
@@ -322,8 +339,10 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         mixed = [Dict("fingerprint" => fp(j), "benchmarks" => Dict("g/a" => Dict("time" => t)))
                  for (j, t) in (("1.10", 100.0), ("1.10", 100.0), ("1.10", 100.0), ("1.10", 100.0),
                                 ("1.11", 100.0), ("1.11", 150.0), ("1.11", 90.0), ("1.11", 140.0), ("1.11", 100.0))]
-        stable = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.10", "1", ""), min_samples = 3)
-        jittery = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.11", "1", ""), min_samples = 3)
+        # Fingerprints without a backend field predate counting backends and
+        # read as the "time" regime.
+        stable = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.10", "1", "time"), min_samples = 3)
+        jittery = build_noise_from_history(mixed; regime = ("Linux", "x86_64", "1.11", "1", "time"), min_samples = 3)
         @test effective_time_tolerance(stable, "g/a", 0.05) == 0.05    # stable regime keeps global tol
         @test effective_time_tolerance(jittery, "g/a", 0.05) > 0.3     # jittery regime widens
     end

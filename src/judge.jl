@@ -117,6 +117,14 @@ function compare(
         end
     end
 
+    # Instruction judging needs both sides measured by the same counting
+    # backend and a single benchmark thread (counters cover the calling thread
+    # only). Gated on the thread count the measuring children actually
+    # reported, not the requested one — env overrides can differ.
+    allruns = vcat(baseline_runs, target_runs)
+    judge_instr = backend in (:perf, :callgrind) &&
+        all(r -> r.backend == string(backend) && r.threads == 1, allruns)
+
     meta = Meta(;
         package = _pkgname(repo),
         baseline_ref = string(baseline),
@@ -129,6 +137,7 @@ function compare(
         time_tolerance, memory_tolerance, instr_tolerance, time_guard_tolerance,
         time_floor_ns = tfloor, memory_floor_bytes = mfloor, instr_floor = ifloor,
         nruns = Int(nruns),
+        instructions_judged = judge_instr,
         suite_changed = _suite_changed(baseline_runs, target_runs),
         run_url, marker,
         timestamp = _now(),
@@ -151,18 +160,9 @@ function compare(
     model = build_noise_from_history(records; regime,
         min_samples = Int(noise_min_samples), factor = noise_factor, cap = noise_cap)
 
-    # Instruction judging needs both sides measured by the same counting
-    # backend and a single benchmark thread (perf counts the calling thread).
-    judge_instr = backend in (:perf, :callgrind) && threads == 1 &&
-        all(r -> r.backend == string(backend), vcat(baseline_runs, target_runs))
-    # When instructions carry the verdict, time is demoted to a *guard* with a
-    # deliberately loose tolerance: it exists to catch slowdowns invisible to
-    # instruction counts (cache locality, frequency effects) — which are large —
-    # not to re-import wall-clock noise into an otherwise deterministic gate.
-    ttol = judge_instr ? max(Float64(time_tolerance), Float64(time_guard_tolerance)) :
-        Float64(time_tolerance)
     measurements = _judge(baseline_runs, target_runs, model;
-        time_tolerance = ttol, memory_tolerance, instr_tolerance,
+        time_tolerance = Float64(time_tolerance), memory_tolerance, instr_tolerance,
+        time_guard = max(Float64(time_tolerance), Float64(time_guard_tolerance)),
         time_floor = tfloor, memory_floor = mfloor, instr_floor = ifloor,
         nruns = Int(nruns), judge_instr, judge_time = time_judged(meta))
 
@@ -183,7 +183,8 @@ end
 # ---------------------------------------------------------------------------
 
 function _judge(baseline_runs, target_runs, model::NoiseModel; time_tolerance, memory_tolerance,
-        instr_tolerance = 0.01, time_floor, memory_floor, instr_floor = 1000.0, nruns,
+        instr_tolerance = 0.01, time_guard = time_tolerance,
+        time_floor, memory_floor, instr_floor = 1000.0, nruns,
         judge_instr::Bool = false, judge_time::Bool = true)
     allkeys = sort!(collect(union((Set(keys(r.estimates)) for r in vcat(baseline_runs, target_runs))...)))
     ms = Measurement[]
@@ -223,15 +224,20 @@ function _judge(baseline_runs, target_runs, model::NoiseModel; time_tolerance, m
 
         # Instructions: near-deterministic, so a flat tolerance with an absolute
         # delta floor; only when both sides were counted by the same backend.
-        instr_v, instr_conf = judge_instr && ir !== nothing ?
+        instr_ok = judge_instr && ir !== nothing
+        instr_v, instr_conf = instr_ok ?
             _classify_instr(pairs, instr_tolerance, instr_floor, nruns) : (:invariant, length(pairs))
 
         # Time: adaptive per-benchmark tolerance from the learned noise band.
-        # Not judged at all under callgrind (simulated time is meaningless).
-        eff_tol = effective_time_tolerance(model, key, time_tolerance)
+        # When instructions carry *this benchmark's* verdict, time is demoted
+        # to a loose guard for count-invisible slowdowns; a benchmark whose
+        # counts are missing keeps the full-strength time gate. Not judged at
+        # all under callgrind (simulated time is meaningless).
+        base_tol = instr_ok ? time_guard : time_tolerance
+        eff_tol = effective_time_tolerance(model, key, base_tol)
         if judge_time
             time_v, time_conf = _classify_time(pairs, eff_tol, time_floor, nruns)
-            time_v_global, _ = _classify_time(pairs, time_tolerance, time_floor, nruns)
+            time_v_global, _ = _classify_time(pairs, base_tol, time_floor, nruns)
             # Suppressed = would fire at the global tolerance but sits inside the noise band.
             suppressed = time_v_global === :regression && time_v !== :regression
         else
@@ -242,7 +248,9 @@ function _judge(baseline_runs, target_runs, model::NoiseModel; time_tolerance, m
 
         verdict, reason = _combine(instr_v, time_v, mem_v)
         conf = verdict === :regression ?
-            (reason === :instructions ? instr_conf : reason === :memory ? mem_conf : time_conf) :
+            max(instr_v === :regression ? instr_conf : 0,
+                time_v === :regression ? time_conf : 0,
+                mem_v === :regression ? mem_conf : 0) :
             verdict === :tradeoff ? min(max(instr_conf, time_conf), mem_conf) :  # both halves must hold
             verdict === :improvement ? max(instr_conf, time_conf, mem_conf) : length(pairs)
         push!(ms, Measurement(key, be, te, tr, mr, ir, verdict, reason, conf, nruns, eff_tol, suppressed))

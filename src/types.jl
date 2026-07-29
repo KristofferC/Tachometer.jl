@@ -136,6 +136,7 @@ struct Meta
     memory_floor_bytes::Float64
     instr_floor::Float64    # absolute instruction-delta floor
     nruns::Int
+    instructions_judged::Bool   # whether instruction counts actually gated verdicts
     suite_changed::Bool
     run_url::String
     marker::String
@@ -161,6 +162,7 @@ function Meta(;
         memory_floor_bytes::Real = 0.0,
         instr_floor::Real = 1000.0,
         nruns::Integer = 1,
+        instructions_judged::Bool = false,
         suite_changed::Bool = false,
         run_url::AbstractString = "",
         marker::AbstractString = "tachometer",
@@ -173,7 +175,7 @@ function Meta(;
         Float64(time_tolerance), Float64(memory_tolerance), Float64(instr_tolerance),
         Float64(time_guard_tolerance),
         Float64(time_floor_ns), Float64(memory_floor_bytes), Float64(instr_floor),
-        Int(nruns), suite_changed, run_url, marker, timestamp, note,
+        Int(nruns), instructions_judged, suite_changed, run_url, marker, timestamp, note,
     )
 end
 

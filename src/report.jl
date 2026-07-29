@@ -101,7 +101,7 @@ function _subtitle(io, r::Report)
         push!(parts, "$(_sha_or_ref(m.baseline_sha, m.baseline_ref, repo)) → $(_sha_or_ref(m.target_sha, m.target_ref, repo))")
     end
     push!(parts, "Julia $(_safetext(m.julia_version))")
-    if m.backend in ("perf", "callgrind")
+    if m.instructions_judged
         push!(parts, "$(m.backend == "perf" ? "hardware" : "simulated") instruction counts")
         push!(parts, "$(_pct1(m.instr_tolerance)) instr tolerance")
         time_judged(m) && push!(parts, "$(_pct0(max(m.time_tolerance, m.time_guard_tolerance))) time guard")
@@ -288,13 +288,15 @@ function _footer(r::Report)
     isempty(m.cpu) || push!(parts, _safetext(m.cpu))
     isempty(m.backend) || push!(parts, "$(m.backend) backend")
     push!(parts, "min estimator")
-    if m.backend in ("perf", "callgrind")
+    if m.instructions_judged
         tguard = time_judged(m) ? " / $(_pct0(max(m.time_tolerance, m.time_guard_tolerance))) time guard" : ""
         push!(parts, "tol $(_pct1(m.instr_tolerance)) instr$(tguard) / $(_pct0(m.memory_tolerance)) mem")
         push!(parts, "floor $(prettycount(m.instr_floor)) insns")
     else
         push!(parts, "tol $(_pct0(m.time_tolerance))/$(_pct0(m.memory_tolerance))")
         push!(parts, "floor $(prettytime(m.time_floor_ns))")
+        m.backend in ("perf", "callgrind") &&
+            push!(parts, "instructions shown but not judged")
     end
     time_judged(m) || push!(parts, "wall time not judged (simulated run)")
     m.nruns > 1 && push!(parts, "$(m.nruns)× runs")
