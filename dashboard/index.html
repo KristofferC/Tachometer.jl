@@ -905,7 +905,10 @@ function initChart(c){
   const labeled = isOverview || c.labeled;
   const pctMode = isOverview || state.view === "pct";
   const fmtY = pctMode ? fmtPct : fmtAbs;
-  const axisFont = (COARSE ? 13 : 10.5) + "px ui-monospace, Menlo, Consolas, monospace";
+  // Integer px only: uPlot rescales the size for high-DPR canvases with
+  // /(\d+)px/, which mangles fractional sizes ("10.5px" -> "10.10px"), leaving
+  // the labels at roughly 1/dpr of the intended size on retina/phone screens.
+  const axisFont = (COARSE ? 13 : 11) + "px ui-monospace, Menlo, Consolas, monospace";
   const w = c.plotEl.clientWidth || 320, h = c.plotEl.clientHeight || 130;
   // One uPlot series per environment segment (identically styled), so the line
   // breaks at regime changes instead of drawing a misleading connector.
