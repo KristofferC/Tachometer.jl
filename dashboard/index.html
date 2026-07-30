@@ -380,24 +380,51 @@ async function load(){
     doc = window.__TACHOMETER_DATA__;           // standalone preview build
   } else {
     try {
-      // Manifest (always fresh) lists the shard files; past-year shards are
-      // immutable, so they are fetched with default caching (HTTP 304 on repeat).
+      // Manifest (always fresh) lists the shard files. Past-year shards are
+      // normally unchanged, so they are fetched with default browser caching.
       const idxRes = await fetch("./data/index.json?_=" + Date.now(), { cache: "no-store" });
+      if(!idxRes.ok) throw new Error("data/index.json returned HTTP " + idxRes.status);
       const idx = await idxRes.json();
-      const shards = Array.isArray(idx.shards) ? idx.shards : [];
+      if(idx.schema !== "tachometer-timeseries" || ![2, 3].includes(idx.version))
+        throw new Error("data/index.json has an unsupported schema or version");
+      const shards = Array.isArray(idx.shards) ? [...idx.shards] : [];
+      if(!shards.every(s => typeof s === "string" && /^shard-\d+$/.test(s)))
+        throw new Error("data/index.json has an invalid shard list");
+      if(new Set(shards).size !== shards.length)
+        throw new Error("data/index.json lists a shard more than once");
+      shards.sort();
       const latest = shards[shards.length - 1];
       const ver = encodeURIComponent(idx.generated_at || "");
       const docs = await Promise.all(shards.map(s =>
         fetch("./data/" + s + ".json" + (s === latest && ver ? "?v=" + ver : ""))
-          .then(r => r.json()).catch(() => ({ records: [] }))));
+          .then(r => {
+            if(!r.ok) throw new Error(s + ".json returned HTTP " + r.status);
+            return r.json();
+          })
+          .then(d => {
+            if(!d || !Array.isArray(d.records)) throw new Error(s + ".json is malformed");
+            return d;
+          })));
       const records = [].concat(...docs.map(d => (d && Array.isArray(d.records)) ? d.records : []));
       doc = { package: idx.package, repo_url: idx.repo_url,
               releases: Array.isArray(idx.releases) ? idx.releases : [],
               fingerprint: idx.latest_fingerprint || {}, generated_at: idx.generated_at, records };
-    } catch(e){ return showEmpty("Could not load <code>data/index.json</code>."); }
+    } catch(e){
+      console.error("Could not load dashboard data:", e);
+      const hint = location.protocol === "file:"
+        ? " Browsers block local data files. Run <code>python3 -m http.server 8000</code> in this directory and open <code>http://localhost:8000/</code>."
+        : " Check <code>data/index.json</code> and every shard it lists.";
+      return showEmpty("Could not load the dashboard data." + hint);
+    }
   }
   if(!doc || !Array.isArray(doc.records) || doc.records.length === 0)
-    return showEmpty("No benchmark history yet. It appears after the tracking workflow runs on the default branch.");
+    return showEmpty("No benchmark history yet. Add a record to <code>data/</code> and reload the page.");
+  if(!doc.records.every(r => r && r.benchmarks && typeof r.benchmarks === "object" &&
+      !Array.isArray(r.benchmarks) &&
+      (r.coverage == null || r.coverage === "snapshot" || r.coverage === "partial") &&
+      (r.removed_benchmarks == null || (Array.isArray(r.removed_benchmarks) &&
+        r.removed_benchmarks.every(k => typeof k === "string" && k.length > 0)))))
+    return showEmpty("The dashboard history contains a malformed record.");
   doc.records.sort((a,b) => (a.date_unix||0) - (b.date_unix||0));
   for(const rel of (doc.releases || [])) if(rel && rel.commit) state.releasesBySha[rel.commit] = rel.tag;
   state.data = doc;
@@ -427,8 +454,9 @@ function showEmpty(html){ $("empty").hidden = false; $("empty").innerHTML = html
 
 function availableStats(){
   const present = new Set();
+  const active = new Set(currentKeys());
   for(const r of state.data.records) for(const k in r.benchmarks)
-    for(const s in r.benchmarks[k]) present.add(s);
+    if(active.has(k)) for(const s in r.benchmarks[k]) present.add(s);
   return STATS.filter(s => present.has(s.key));
 }
 
@@ -563,11 +591,30 @@ function visibleRecords(){
   return recs.filter(r => (r.date_unix||0) >= last - days*86400);
 }
 
-// Benchmarks that still exist at the newest commit — deleted ones were
-// removed for a reason, so they are not shown anywhere.
-function currentKeys(){
+// Records without an explicit coverage field predate partial uploads and are
+// complete snapshots. Partial records update the active set without making
+// unmeasured benchmarks disappear.
+function recordCoverage(r){ return r.coverage === "partial" ? "partial" : "snapshot"; }
+function removedBenchmarks(r){
+  return Array.isArray(r.removed_benchmarks) ? r.removed_benchmarks : [];
+}
+function activeKeysAt(lastIndex){
+  const active = new Set();
   const all = state.data.records;
-  return Object.keys(all[all.length-1].benchmarks).sort();
+  const end = lastIndex == null ? all.length - 1 : lastIndex;
+  for(let i = 0; i <= end; i++){
+    const r = all[i];
+    if(recordCoverage(r) === "snapshot") active.clear();
+    for(const key of Object.keys(r.benchmarks)) active.add(key);
+    for(const key of removedBenchmarks(r)) active.delete(key);
+  }
+  return [...active].sort();
+}
+
+// Benchmarks active after replaying snapshots, partial additions, and explicit
+// removals through the newest record.
+function currentKeys(){
+  return activeKeysAt();
 }
 
 function filteredKeys(){
@@ -587,14 +634,14 @@ function seriesFor(recs, key, seg){
     return (typeof v === "number" && isFinite(v)) ? v : null;
   });
   const segBase = [], bases = new Array(vals.length).fill(null);
-  let base = null, last = null;
+  let base = null, last = null, lastIndex = null;
   for(let i = 0; i < vals.length; i++){
     const s = seg[i];
     if(segBase[s] == null && vals[i] != null) segBase[s] = vals[i];
     bases[i] = segBase[s] == null ? null : segBase[s];
-    if(vals[i] != null){ last = vals[i]; base = segBase[s]; }
+    if(vals[i] != null){ last = vals[i]; base = segBase[s]; lastIndex = i; }
   }
-  return { vals, bases, base, last };
+  return { vals, bases, base, last, lastIndex };
 }
 
 const toPct = (vals, bases) =>
@@ -603,7 +650,8 @@ const toPct = (vals, bases) =>
 // Geomean of per-benchmark ratios (each vs its first value in the same
 // environment segment), as % change.
 function overviewSeries(recs, series){
-  return recs.map((_, i) => {
+  return recs.map((r, i) => {
+    if(recordCoverage(r) === "partial") return null;
     let logSum = 0, n = 0;
     for(const s of series){
       const v = s.vals[i], b = s.bases[i];
@@ -672,7 +720,20 @@ function renderGraphsPage(host){
     return showEmpty(state.q ? "No benchmarks match the filter." : "No data for this statistic in this range.");
   state.ctx = { recs, xs, markers, byKey: new Map(series.map(s => [s.key, s])) };
 
-  host.appendChild(renderOverview(recs, xs, series, markers));
+  const partialCount = recs.filter(r => recordCoverage(r) === "partial").length;
+  const snapshotCount = recs.length - partialCount;
+  if(snapshotCount) host.appendChild(renderOverview(recs, xs, series, markers));
+  else {
+    const n = el("div","ov-note");
+    n.textContent = "Overview unavailable: this range contains only partial uploads. Individual charts show every measured point.";
+    host.appendChild(n);
+  }
+  if(partialCount){
+    const n = el("div","ov-note");
+    n.textContent = partialCount + " partial upload" + (partialCount>1?"s":"") +
+      " in range — omitted from the aggregate overview; individual benchmark charts include them";
+    host.appendChild(n);
+  }
   if(markers.env.length){
     const n = el("div","ov-note");
     n.textContent = markers.env.length + " environment change" + (markers.env.length>1?"s":"") +
@@ -731,8 +792,8 @@ function renderGraphsPage(host){
 function renderOverview(recs, xs, series, markers){
   const box = el("section","card overview");
   const ys = overviewSeries(recs, series);
-  let lastPct = null;
-  for(const v of ys) if(v != null) lastPct = v;
+  let lastPct = null, lastPctIndex = null;
+  for(let i = 0; i < ys.length; i++) if(ys[i] != null){ lastPct = ys[i]; lastPctIndex = i; }
 
   const ro = el("div","readout");
   const big = el("div","big mono");
@@ -745,6 +806,8 @@ function renderOverview(recs, xs, series, markers){
   // Baseline of the newest environment segment, not necessarily the range start.
   const s0 = recs[markers.seg.indexOf(markers.seg[markers.seg.length-1])];
   since.textContent = "vs " + (s0.date || "").slice(0,10) + " · " + recs.length + " commits";
+  if(lastPctIndex != null && lastPctIndex < recs.length - 1)
+    since.textContent += " · complete through " + (recs[lastPctIndex].date || "").slice(0,10);
   ro.append(big, what, since);
 
   const wrap = el("div","ov-chart"); const plot = el("div","plot");
@@ -760,6 +823,11 @@ function renderCard(recs, xs, s, markers){
   const name = el("span","name mono"); name.textContent = shortName(s.key); name.title = s.key;
   head.append(name, deltaChip(s), fullscreenBtn(s.key));
   const val = el("span","val mono"); val.textContent = fmtAbs(s.last);
+  if(s.lastIndex != null && s.lastIndex < recs.length - 1){
+    const n = recs.length - 1 - s.lastIndex;
+    val.title = "Last measured " + ((recs[s.lastIndex].date || "").slice(0,10) || n + " commits ago") +
+      " (" + n + " later commit" + (n>1?"s":"") + " did not measure it)";
+  }
   head.insertBefore(val, head.lastChild);
   const plot = el("div","plot");
   card.append(head, plot);
@@ -808,6 +876,8 @@ function openModal(key){
   const head = el("div","modal-head");
   const name = el("span","name mono"); name.textContent = s.key;
   const val = el("span","val mono"); val.textContent = fmtAbs(s.last);
+  if(s.lastIndex != null && s.lastIndex < recs.length - 1)
+    val.title = "Last measured " + (recs[s.lastIndex].date || "").slice(0,10);
   const close = el("button","close"); close.textContent = "✕"; close.setAttribute("aria-label","Close");
   close.addEventListener("click", () => closeModal(true));
   head.append(name, deltaChip(s), val, close);
@@ -881,6 +951,10 @@ function renderComparePage(host){
     idr.append(" · " + (rec.date||"").slice(0,10));
     const tag = state.releasesBySha[rec.commit];
     if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; idr.appendChild(t); }
+    if(recordCoverage(rec) === "partial"){
+      const t = el("span","chip flat"); t.textContent = "partial"; t.title = "Only selected benchmarks were measured";
+      idr.appendChild(t);
+    }
     const msg = el("div","cmsg"); msg.textContent = rec.message || ""; msg.title = rec.message || "";
     side.append(role, idr, msg, mkSel(which));
     return side;
@@ -962,11 +1036,20 @@ function renderComparePage(host){
         envChangeDesc(rb, ra) + ")";
       sum.appendChild(warn);
     }
+    if(recordCoverage(rb) === "partial" || recordCoverage(ra) === "partial"){
+      const warn = el("span","lbl");
+      warn.textContent = "Partial upload selected — comparison uses only measurements present at those commits.";
+      sum.appendChild(warn);
+    }
     host.appendChild(sum);
   }
   host.appendChild(ctl);
-  if(rows.length === 0)
-    return host.appendChild(Object.assign(el("div","empty"), { textContent: "No benchmarks match." }));
+  if(rows.length === 0){
+    const msg = recordCoverage(ra) === "partial" && Object.keys(ra.benchmarks).length === 0
+      ? "This partial upload contains only explicit benchmark removals."
+      : "No benchmarks match.";
+    return host.appendChild(Object.assign(el("div","empty"), { textContent: msg }));
+  }
 
   const wrap = el("div","card"); wrap.style.overflow = "hidden";
   const tbl = el("table","cmp");
@@ -993,7 +1076,10 @@ function renderComparePage(host){
     const tda = el("td","num mono"); tda.textContent = fmtAbs(r.va);
     const tdd = el("td","num");
     const chip = el("span","chip mono");
-    if(r.pct == null){ chip.classList.add("flat"); chip.textContent = r.vb == null ? "new" : "—"; }
+    if(r.pct == null){
+      chip.classList.add("flat");
+      chip.textContent = r.vb == null && recordCoverage(rb) === "snapshot" ? "new" : "not measured";
+    }
     else if(Math.abs(r.pct) < CHIP_EPS){ chip.classList.add("flat"); chip.textContent = "· " + fmtPct(r.pct); }
     else if(r.pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(r.pct); }
     else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(r.pct); }
@@ -1011,16 +1097,22 @@ function renderCommitsPage(host){
   if(recs.length === 0) return showEmpty("No records in this time range.");
   const q = state.q.toLowerCase();
   const keys = currentKeys().filter(k => !q || k.toLowerCase().includes(q));
+  const previousSnapshot = [];
+  let snapshot = null;
+  for(const r of recs){
+    previousSnapshot.push(snapshot);
+    if(recordCoverage(r) === "snapshot") snapshot = r;
+  }
 
   const hint = el("div","tl-hint");
-  hint.textContent = "Δ is the " + statDef().label.toLowerCase() +
-    " geomean vs the previous benchmarked commit" + (state.q ? " (filtered benchmarks)" : "") +
-    " — ⇄ shows the full comparison against the predecessor.";
+  hint.textContent = "Snapshot Δ is the " + statDef().label.toLowerCase() +
+    " geomean vs the previous complete snapshot" + (state.q ? " (filtered benchmarks)" : "") +
+    "; partial uploads show — because their aggregate coverage is incomplete — ⇄ compares measured results with that snapshot.";
   host.appendChild(hint);
 
   const list = el("div","card timeline");
   for(let i = recs.length-1; i >= 0; i--){
-    const r = recs[i], prev = i > 0 ? recs[i-1] : null;
+    const r = recs[i], prev = i > 0 ? recs[i-1] : null, baseline = previousSnapshot[i];
     const row = el("div","commit");
     const date = el("span","date"); date.textContent = (r.date||"").slice(0,10);
     const sha = el("a","sha"); sha.textContent = (r.commit||"").slice(0,7);
@@ -1028,11 +1120,12 @@ function renderCommitsPage(host){
     if(url){ sha.href = url; sha.target = "_blank"; sha.rel = "noopener"; }
     const msg = el("span","msg"); msg.textContent = r.message || ""; msg.title = r.message || "";
     row.append(date, sha);
-    if(prev){
-      const cmp = el("button","cmpbtn"); cmp.textContent = "⇄"; cmp.title = "Compare against predecessor";
-      cmp.setAttribute("aria-label", "Compare " + (r.commit||"").slice(0,7) + " against its predecessor");
+    if(baseline){
+      const cmp = el("button","cmpbtn"); cmp.textContent = "⇄";
+      cmp.title = "Compare against previous complete snapshot";
+      cmp.setAttribute("aria-label", "Compare " + (r.commit||"").slice(0,7) + " against the previous complete snapshot");
       cmp.addEventListener("click", () => {
-        state.before = prev.commit; state.after = r.commit; state.page = "compare"; onControlChange();
+        state.before = baseline.commit; state.after = r.commit; state.page = "compare"; onControlChange();
         window.scrollTo(0, 0);
       });
       row.appendChild(cmp);
@@ -1040,6 +1133,11 @@ function renderCommitsPage(host){
     row.append(msg);
     const tag = state.releasesBySha[r.commit];
     if(tag){ const t = el("span","chip rel mono"); t.textContent = tag; row.appendChild(t); }
+    if(recordCoverage(r) === "partial"){
+      const t = el("span","chip flat"); t.textContent = "partial";
+      t.title = "Only selected benchmarks were measured at this commit";
+      row.appendChild(t);
+    }
     if(prev && regimeKey(prev) !== regimeKey(r)){
       const t = el("span","chip flat"); t.textContent = "env";
       t.title = "measurement environment changed — " + envChangeDesc(prev, r);
@@ -1047,10 +1145,10 @@ function renderCommitsPage(host){
     }
     row.appendChild(el("span","spacer"));
     let pct = null;
-    if(prev){
+    if(baseline && recordCoverage(r) === "snapshot"){
       let logSum = 0, n = 0;
       for(const k of keys){
-        const va = statValue(r, k), vb = statValue(prev, k);
+        const va = statValue(r, k), vb = statValue(baseline, k);
         if(va != null && vb > 0){ logSum += Math.log(va/vb); n++; }
       }
       if(n) pct = (Math.exp(logSum/n) - 1) * 100;
@@ -1086,8 +1184,21 @@ function initChart(c){
   const ysSplit = nSeg === 1 ? [c.ys] :
     Array.from({ length: nSeg }, (_, s) => c.ys.map((v, i) => seg[i] === s ? v : null));
   const mkSeries = ys => ({
-    stroke: getVar("--series"), width: 1.5, spanGaps: true,
-    points: { show: ys.reduce((n, v) => n + (v != null), 0) === 1, size: 5 },
+    stroke: getVar("--series"), width: 1.5, spanGaps: false,
+    points: {
+      show: ys.reduce((n, v) => n + (v != null), 0) === 1,
+      filter: (u, seriesIdx, show) => {
+        if(show || isOverview) return null;
+        const plotted = u.data[seriesIdx], idxs = [];
+        for(let i = 0; i < plotted.length; i++){
+          if(plotted[i] != null &&
+             ((i > 0 && c.ys[i-1] == null) || (i + 1 < c.ys.length && c.ys[i+1] == null)))
+            idxs.push(i);
+        }
+        return idxs.length ? idxs : null;
+      },
+      size: 5,
+    },
     fill: pctMode ? undefined : getVar("--series-soft"),
   });
   const opts = {

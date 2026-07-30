@@ -1,0 +1,63 @@
+# Build the example dashboard from synthetic data and deploy it to GitHub
+# Pages, so there is a live demo to link to from the README:
+# https://kristofferc.github.io/Tachometer.jl/demo/
+#
+# This repository's Pages must be set to "Source: GitHub Actions". (Users of
+# Tachometer set up examples/track.yml instead, which publishes real history
+# to a gh-pages branch.)
+#
+# The monthly run keeps the synthetic timeline ending "today" instead of aging.
+name: Demo dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - dashboard/**
+      - scripts/generate-demo-data.jl
+      - .github/workflows/demo-dashboard.yml
+  schedule:
+    - cron: "17 4 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-dashboard
+  # Do not interrupt a production deployment once it has started.
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: "${{ steps.deployment.outputs.page_url }}demo/"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+      - uses: julia-actions/cache@v2
+
+      - name: Generate demo site
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          mkdir -p "$RUNNER_TEMP/site"
+          touch "$RUNNER_TEMP/site/.nojekyll"
+          julia --project=. --startup-file=no scripts/generate-demo-data.jl "$RUNNER_TEMP/site/demo"
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/site
+      - id: deployment
+        uses: actions/deploy-pages@v4
