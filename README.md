@@ -214,7 +214,7 @@ pushes and publishes a static dashboard at:
 https://OWNER.github.io/REPOSITORY/benchmarks/
 ```
 
-**[Live example →](https://kristofferc.github.io/Tachometer.jl/)** — generated
+**[Live example →](https://kristofferc.github.io/Tachometer.jl/demo/)** — generated
 from synthetic data by [`scripts/generate-demo-data.jl`](scripts/generate-demo-data.jl),
 so regressions, releases, and environment changes all have something to show.
 
@@ -245,7 +245,38 @@ exists, they use the fixed tolerances.
 The dashboard is written only below `benchmarks/`, so it can share a Pages
 branch with Documenter.
 
-## Local use
+### Using only the dashboard (bring your own runner)
+
+The dashboard doesn't care where the numbers come from: it is three static
+files plus a `data/` directory of plain JSON. If you already have a
+benchmarking framework and just want the dashboard, build records from your
+own measurements:
+
+```julia
+using Dates
+using Tachometer
+
+rec = Tachometer.make_record(
+    Dict("assembly/global" => (time = 11.8e6, memory = 6.9e6, allocs = 15_240));
+    commit = "60ab91e0123456789abcdef0123456789abcdef0",
+    date = DateTime(2026, 7, 30, 9, 41),
+    coverage = :partial)  # unmeasured benchmarks remain visible
+Tachometer.add_record!("site/data", rec;
+    package = "MyPkg.jl", repo_url = nothing)
+Tachometer.write_dashboard("site")   # the static page, next to data/
+```
+
+Use the default `coverage = :snapshot` when the dictionary is the complete
+suite. Partial uploads for the same commit are merged; use
+`removed_benchmarks = ["old/name"]` to explicitly retire a benchmark.
+
+To use it only on your machine, run
+`python3 -m http.server --directory site 8000` and open
+<http://localhost:8000/>. Nothing is uploaded. Publishing `site/` is optional.
+[`dashboard/README.md`](dashboard/README.md) has a local demo, the JSON schema,
+and instructions for non-Julia runners.
+
+## Compare locally
 
 Install Tachometer from the repository if it is not already in the active
 environment:

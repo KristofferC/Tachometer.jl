@@ -9,6 +9,7 @@ using Tachometer: Estimate, Measurement, Meta, Report, RevisionRun, NoiseModel,
     regressions, improvements, invariants, tradeoffs, added, removed, suppressed, compared,
     project_version, last_release_tag, _release_baseline, WORKINGTREE, _write_driver, _run_julia,
     load_index, load_shard, load_all_records, _releases, _shard_name, write_dashboard,
+    make_record, add_record!, default_fingerprint, JSON,
     report_to_dict, report_from_dict
 
 # Build a RevisionRun from a plain key => (time, memory[, allocs]) mapping.
@@ -514,6 +515,153 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         write(joinpath(d5, "shard-2026.json"), "{\"records\":[{\"commit\":\"b\",\"date_unix\":20,\"benchmarks\":{}}]}")
         recs = load_all_records(d5)
         @test [r["commit"] for r in recs] == ["a", "b"]   # concatenated, chronological
+    end
+
+    @testset "bring-your-own-runner record API" begin
+        sha = "60ab91e0123456789abcdef0123456789abcdef0"
+        rec = make_record(
+            Dict("g/hot" => (time = 1.5e6, memory = 1024, allocs = 3),
+                 "cold" => Dict("time" => 9.0e3));
+            commit = uppercase(sha),                       # normalized to lowercase
+            date = DateTime(2026, 3, 1, 12),
+            message = "speed up hot loop", version = "1.2.0")
+        @test rec["commit"] == sha
+        @test rec["date_unix"] == round(Int, Dates.datetime2unix(DateTime(2026, 3, 1, 12)))
+        @test rec["date"] == "2026-03-01T12:00:00Z"
+        @test rec["benchmarks"]["g/hot"] == Dict("time" => 1.5e6, "memory" => 1024, "allocs" => 3)
+        @test rec["benchmarks"]["cold"] == Dict("time" => 9.0e3)
+        @test rec["coverage"] == "snapshot" && isempty(rec["removed_benchmarks"])
+        @test rec["fingerprint"]["os"] == string(Sys.KERNEL)   # defaulted
+        # Unix seconds and DateTime describe the same instant.
+        @test make_record(Dict("x" => (time = 1,)); commit = sha,
+            date = rec["date_unix"])["date"] == rec["date"]
+
+        # Validation: bad sha/date, empty input, unknown stats, and bad values.
+        @test_throws ErrorException make_record(Dict{String, Any}(); commit = "xyz", date = 0)
+        @test_throws ErrorException make_record(Dict{String, Any}(); commit = sha, date = 0)
+        @test_throws ErrorException make_record(Dict("a" => (time = 1,)); commit = sha, date = true)
+        @test_throws ErrorException make_record(Dict("a" => (mem = 1,)); commit = sha, date = 0)
+        @test_throws ErrorException make_record(Dict("a" => (time = NaN,)); commit = sha, date = 0)
+        @test_throws ErrorException make_record(Dict("a" => (time = -1,)); commit = sha, date = 0)
+        @test_throws ErrorException make_record(Dict("a" => (time = true,)); commit = sha, date = 0)
+        @test_throws ErrorException make_record(Dict("a" => Dict{String, Any}()); commit = sha, date = 0)
+        @test_throws ErrorException make_record(Dict("a" => (time = 1,)); commit = sha,
+            date = 0, fingerprint = Dict("backend" => NaN))
+        @test_throws ErrorException make_record(Dict("a" => (time = 1,)); commit = sha,
+            date = 0, fingerprint = Dict("backend" => Dict()))
+        @test_throws ErrorException make_record(Dict("a" => (time = 1,)); commit = sha,
+            date = 0, coverage = :unknown)
+        @test_throws ErrorException make_record(Dict("a" => (time = 1,)); commit = sha,
+            date = 0, removed_benchmarks = ["b"])
+        @test_throws ErrorException make_record(Dict("a" => (time = 1,)); commit = sha,
+            date = 0, coverage = :partial, removed_benchmarks = ["a"])
+
+        # Partial uploads merge at the same commit and preserve snapshot
+        # completeness. Explicit removals delete a benchmark without treating
+        # every unmeasured benchmark as deleted.
+        partial_data = joinpath(mktempdir(), "data")
+        regime = Dict("cpu" => "local", "julia" => "1.12")
+        base = make_record(Dict("a" => (time = 1,), "b" => (time = 2,), "c" => (time = 3,));
+            commit = sha, date = DateTime(2026, 1, 1), message = "base", fingerprint = regime)
+        update = make_record(Dict("a" => (time = 4,));
+            commit = sha, date = DateTime(2026, 1, 1), coverage = :partial,
+            removed_benchmarks = ["b"], fingerprint = regime)
+        add_record!(partial_data, base)
+        add_record!(partial_data, update)
+        merged = only(load_all_records(partial_data))
+        @test merged["coverage"] == "snapshot"
+        @test merged["message"] == "base"                  # empty partial default did not erase it
+        @test merged["benchmarks"] == Dict(
+            "a" => Dict("time" => 4), "c" => Dict("time" => 3))
+        @test isempty(merged["removed_benchmarks"])
+
+        # Several partial uploads for a new commit accumulate measurements and
+        # tombstones while remaining explicitly partial.
+        partial_sha = "c"^40
+        p1 = make_record(Dict("a" => (time = 5,), "c" => (time = 6,)); commit = partial_sha,
+            date = DateTime(2026, 2, 1), coverage = :partial, fingerprint = regime)
+        p2 = make_record(Dict{String, Any}(); commit = partial_sha,
+            date = DateTime(2026, 2, 1), coverage = :partial,
+            removed_benchmarks = ["a"], fingerprint = regime)
+        add_record!(partial_data, p1)
+        add_record!(partial_data, p2)
+        partial_merged = load_all_records(partial_data)[end]
+        @test partial_merged["coverage"] == "partial"
+        @test partial_merged["benchmarks"] == Dict("c" => Dict("time" => 6))
+        @test partial_merged["removed_benchmarks"] == ["a"]
+
+        # Never combine measurements from different regimes under one commit.
+        mismatch = make_record(Dict("d" => (time = 7,)); commit = partial_sha,
+            date = DateTime(2026, 2, 1), coverage = :partial,
+            fingerprint = Dict("cpu" => "other"))
+        @test_throws ErrorException add_record!(partial_data, mismatch)
+        @test !haskey(load_all_records(partial_data)[end]["benchmarks"], "d")
+
+        # add_record! creates the history, upserts by sha, and shards by year.
+        dd = mktempdir()
+        data = joinpath(dd, "data")
+        add_record!(data, rec; package = "MyPkg.jl", repo_url = "https://x.y/z",
+            releases = [(tag = "v1.0.0", commit = "a"^40, date_unix = 100)])
+        idx = JSON.parsefile(joinpath(data, "index.json"))
+        @test idx["schema"] == "tachometer-timeseries" && idx["version"] == 3
+        @test idx["shards"] == ["shard-2026"]
+        @test idx["package"] == "MyPkg.jl" && idx["repo_url"] == "https://x.y/z"
+        @test idx["releases"] == [Dict("tag" => "v1.0.0", "commit" => "a"^40, "date_unix" => 100)]
+        @test idx["latest_fingerprint"]["os"] == string(Sys.KERNEL)
+
+        # Same commit again -> replaced, not duplicated; omitted kwargs untouched.
+        rec2 = make_record(Dict("g/hot" => (time = 2.0e6,)); commit = sha, date = rec["date_unix"])
+        add_record!(data, rec2)
+        recs2 = load_all_records(data)
+        @test length(recs2) == 1 && recs2[1]["benchmarks"]["g/hot"]["time"] == 2.0e6
+        @test JSON.parsefile(joinpath(data, "index.json"))["package"] == "MyPkg.jl"
+
+        # A commit from another year lands in its own shard, chronologically.
+        old = make_record(Dict("g/hot" => (time = 3.0e6,)); commit = "b"^40,
+            date = DateTime(2025, 6, 1), fingerprint = Dict("cpu" => "old runner"))
+        add_record!(data, old)
+        @test JSON.parsefile(joinpath(data, "index.json"))["shards"] == ["shard-2025", "shard-2026"]
+        @test [r["commit"] for r in load_all_records(data)] == ["b"^40, sha]
+        # Backfilling an old commit must not make its fingerprint appear latest.
+        @test JSON.parsefile(joinpath(data, "index.json"))["latest_fingerprint"] == rec2["fingerprint"]
+
+        # Correcting a commit date moves it instead of duplicating it across shards.
+        moved = make_record(Dict("g/hot" => (time = 4.0e6,)); commit = "b"^40,
+            date = DateTime(2024, 6, 1), fingerprint = Dict("cpu" => "old runner"))
+        add_record!(data, moved)
+        all = load_all_records(data)
+        @test count(r -> r["commit"] == "b"^40, all) == 1
+        @test all[1]["date_unix"] == moved["date_unix"]
+        @test isempty(JSON.parsefile(joinpath(data, "shard-2025.json"))["records"])
+
+        # Explicit nothing disables repository links; omitting the keyword preserves it.
+        add_record!(data, rec2; repo_url = nothing)
+        @test JSON.parsefile(joinpath(data, "index.json"))["repo_url"] === nothing
+
+        # Structural validation and fail-closed behavior.
+        @test_throws ErrorException add_record!(data, Dict{String, Any}("commit" => sha))
+        bad_coverage = copy(rec); bad_coverage["coverage"] = "unknown"
+        @test_throws ErrorException add_record!(data, bad_coverage)
+        bad_removed = copy(rec); bad_removed["coverage"] = "partial"
+        bad_removed["removed_benchmarks"] = ["cold"]
+        @test_throws ErrorException add_record!(data, bad_removed) # measured and removed
+        @test_throws ErrorException add_record!(data, rec;
+            releases = [(tag = "v1.0.0",)])                # release without commit
+        @test_throws ErrorException add_record!(data, rec; repo_url = "http://example.com")
+        d6 = mktempdir(); write(joinpath(d6, "index.json"), "not json{")
+        @test_throws ErrorException add_record!(d6, rec)   # corrupt index -> refuse
+        d7 = mktempdir()
+        write(joinpath(d7, "index.json"),
+            "{\"schema\":\"tachometer-timeseries\",\"version\":2,\"shards\":[\"shard-2020\"]}")
+        @test_throws ErrorException add_record!(d7, rec)   # listed shard is missing
+
+        # Existing v2 histories upgrade without rewriting their old records;
+        # missing coverage retains the old snapshot meaning.
+        d8 = mktempdir()
+        write(joinpath(d8, "index.json"),
+            "{\"schema\":\"tachometer-timeseries\",\"version\":2,\"shards\":[]}")
+        add_record!(d8, rec)
+        @test JSON.parsefile(joinpath(d8, "index.json"))["version"] == 3
     end
 
     @testset "release list from tags" begin

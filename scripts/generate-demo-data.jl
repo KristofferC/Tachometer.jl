@@ -6,8 +6,8 @@
 # history to accumulate. The numbers are fake but shaped like real history:
 # run-to-run noise, a regression that later gets fixed, a memory blow-up, a
 # slow drift, an improvement, a benchmark added midway, release tags, and two
-# measurement-environment changes (runner swap, Julia minor bump) so the
-# dashboard's re-baselining and env markers have something to show.
+# measurement-environment changes (runner swap, Julia minor bump). Two commits
+# contain partial uploads so the dashboard also demonstrates sparse histories.
 #
 # The RNG is seeded, so the shape of the history is reproducible; the timeline
 # always ends at the day the script runs.
@@ -126,6 +126,10 @@ function generate()
     events = Dict(at(f) => (key, tm, mm, am, msg) for (f, key, tm, mm, am, msg) in EVENTS)
     envidx = [at(f) for f in ENV_CHANGES]
     relidx = Dict(at(f) => tag for (f, tag) in RELEASES)
+    partialidx = Dict(
+        at(0.68) => ["assembly/global", "solve/cg"],
+        at(0.70) => ["mesh/generate", "io/export_vtk"],
+    )
     # Project version at record i: the tag at a release commit, otherwise the
     # next release's version with -DEV (a plausible development sequence).
     function version_at(i)
@@ -182,6 +186,13 @@ function generate()
                 "allocs" => round(Int, b.allocs * allocmul[b.key] * envm[b.key]),
             )
         end
+        coverage = "snapshot"
+        if haskey(partialidx, i)
+            selected = partialidx[i]
+            benches = Dict(key => benches[key] for key in selected if haskey(benches, key))
+            coverage = "partial"
+            msg = "Run selected benchmarks: " * join(selected, ", ")
+        end
 
         push!(records, Dict(
             "commit" => sha,
@@ -193,6 +204,8 @@ function generate()
             "version" => version_at(i),
             "fingerprint" => fingerprint(seg, suite),
             "benchmarks" => benches,
+            "coverage" => coverage,
+            "removed_benchmarks" => String[],
         ))
     end
     return records, releases
@@ -204,6 +217,12 @@ end
 # next to the dashboard assets (see src/timeseries.jl).
 
 function write_site(outdir, records, releases)
+    marker = joinpath(outdir, ".tachometer-demo")
+    generated_paths = ("index.html", "uPlot.iife.min.js", "uPlot.min.css", "data")
+    if !isfile(marker) && any(path -> ispath(joinpath(outdir, path)), generated_paths)
+        error("refusing to overwrite a dashboard that was not created by this demo generator: $outdir")
+    end
+
     datadir = joinpath(outdir, "data")
     mkpath(datadir)
 
@@ -219,7 +238,7 @@ function write_site(outdir, records, releases)
     end
 
     index = Dict(
-        "schema" => "tachometer-timeseries", "version" => 2,
+        "schema" => "tachometer-timeseries", "version" => 3,
         "package" => "Example.jl",
         "repo_url" => nothing,  # fake commits: no links rather than dead links
         "shards" => sort(collect(keys(shards))),
@@ -235,6 +254,7 @@ function write_site(outdir, records, releases)
     for f in ("index.html", "uPlot.iife.min.js", "uPlot.min.css")
         cp(joinpath(dashboard, f), joinpath(outdir, f); force = true)
     end
+    touch(marker)
     touch(joinpath(outdir, ".nojekyll"))
     return length(records)
 end
