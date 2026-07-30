@@ -55,30 +55,31 @@
          background: color-mix(in srgb, var(--bg) 82%, transparent);
          backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
   .bar-inner { max-width: 1360px; margin: 0 auto; padding: 9px 20px;
-               display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+               display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .tabs { display: flex; gap: 2px; background: var(--card); border: 1px solid var(--hairline);
           border-radius: 8px; padding: 2px; }
   .tabs button { border: 0; background: none; padding: 4px 12px; border-radius: 6px;
                  color: var(--muted); cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; }
   .tabs button[aria-pressed=true] { background: color-mix(in srgb, var(--series) 12%, transparent);
                                     color: var(--ink); }
-  .bar input[type=search] { flex: 1 1 140px; min-width: 120px; max-width: 260px;
+  .bar input[type=search] { flex: 1 1 112px; min-width: 108px; max-width: 260px;
     padding: 6px 10px; border: 1px solid var(--hairline); border-radius: 8px;
     background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
   .seg { display: inline-flex; border: 1px solid var(--hairline); border-radius: 8px;
          background: var(--card); overflow: hidden; }
   .seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px;
-                padding: 6px 11px; cursor: pointer; }
+                padding: 6px 10px; cursor: pointer; }
   .seg button + button { border-left: 1px solid var(--hairline); }
   .seg button[aria-pressed=true] { color: var(--ink); font-weight: 600;
     background: color-mix(in srgb, var(--series) 10%, transparent); }
   .dates { display: inline-flex; gap: 4px; align-items: center; color: var(--faint); font-size: 12px; }
   .dates input { border: 1px solid var(--hairline); border-radius: 8px; background: var(--card);
-                 color: var(--ink); font: inherit; font-size: 12px; padding: 4px 6px; width: 118px; }
+                 color: var(--ink); font: inherit; font-size: 12px; padding: 4px 6px; width: 108px; }
   .bar .meta { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
   input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--series); outline-offset: 1px; }
-  body[data-page="compare"] #viewSeg, body[data-page="compare"] #rangeSeg, body[data-page="compare"] .dates { display: none; }
-  body[data-page="commits"] #viewSeg { display: none; }
+  body[data-page="compare"] #viewSeg, body[data-page="compare"] #linkSeg,
+  body[data-page="compare"] #rangeSeg, body[data-page="compare"] .dates { display: none; }
+  body[data-page="commits"] #viewSeg, body[data-page="commits"] #linkSeg { display: none; }
 
   main { max-width: 1360px; margin: 0 auto; padding: 16px 20px 40px; }
   .card { background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; }
@@ -214,6 +215,9 @@
   #tooltip .sha { color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
   #tooltip .tag { color: var(--release); font-weight: 650; margin-left: 6px; }
   #tooltip .msg { margin: 3px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #tooltip .env { margin: 5px 0; padding: 2px 8px; border-left: 2px solid var(--faint);
+                  color: var(--muted); font-size: 11.5px; }
+  #tooltip .env b { display: block; color: var(--ink); font-weight: 650; }
   #tooltip .num { font-variant-numeric: tabular-nums; }
   #tooltip .delta.good { color: var(--good); } #tooltip .delta.bad { color: var(--bad); }
 
@@ -249,6 +253,10 @@
     <div class="seg" id="viewSeg" role="group" aria-label="Scale">
       <button id="vPct" aria-pressed="true">% change</button>
       <button id="vAbs" aria-pressed="false">Absolute</button>
+    </div>
+    <div class="seg" id="linkSeg" role="group" aria-label="Environment changes" hidden>
+      <button id="vLink" aria-pressed="false"
+        title="Draw lines through environment changes (dotted lines) instead of breaking, with percent changes relative to the range's first commit">Link env</button>
     </div>
     <div class="seg" id="rangeSeg" role="group" aria-label="Time range"></div>
     <span class="dates">
@@ -287,7 +295,7 @@ const SYNC_KEY = "tach";
 const COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
 
 const state = { page: "graphs", stat: null, view: "pct", range: "all", from: "", to: "",
-                q: "", before: "", after: "", fs: "", sort: "delta", hidecats: "", data: null,
+                q: "", before: "", after: "", fs: "", sort: "delta", hidecats: "", link: false, data: null,
                 releasesBySha: Object.create(null), cards: [], overview: null, modal: null };
 
 const $ = id => document.getElementById(id);
@@ -444,6 +452,8 @@ async function load(){
   if(doc.generated_at) $("foot").textContent = "Updated " + doc.generated_at.slice(0,10) + " · made with Tachometer.jl";
 
   readHash();
+  // The toggle is pointless when the whole history was measured in one environment.
+  $("linkSeg").hidden = !doc.records.some((r, i) => i > 0 && regimeKey(r) !== regimeKey(doc.records[i-1]));
   buildTabs(); buildStatSeg(); buildRangeSeg(); initDates(); syncControls();
   rebuild();
 }
@@ -526,6 +536,7 @@ function syncControls(){
   for(const b of $("rangeSeg").children) b.ariaPressed = b.dataset.range === state.range;
   $("vPct").ariaPressed = state.view === "pct";
   $("vAbs").ariaPressed = state.view === "abs";
+  $("vLink").ariaPressed = state.link;
   if($("dFrom").value !== state.from) $("dFrom").value = state.from;
   if($("dTo").value !== state.to) $("dTo").value = state.to;
   if($("search").value !== state.q) $("search").value = state.q;
@@ -548,6 +559,7 @@ function readHash(){
   if(p.get("fs")) state.fs = p.get("fs");
   if(p.get("sort") === "name") state.sort = "name";
   if(p.get("hide")) state.hidecats = p.get("hide");
+  if(p.get("link") === "1") state.link = true;
 }
 function writeHash(){
   const p = new URLSearchParams();
@@ -561,11 +573,13 @@ function writeHash(){
   if(state.fs) p.set("fs", state.fs);
   if(state.sort !== "delta") p.set("sort", state.sort);
   if(state.hidecats) p.set("hide", state.hidecats);
+  if(state.link) p.set("link", "1");
   history.replaceState(null, "", "#" + p.toString());
 }
 
 $("vPct").addEventListener("click", () => { state.view = "pct"; onControlChange(); });
 $("vAbs").addEventListener("click", () => { state.view = "abs"; onControlChange(); });
+$("vLink").addEventListener("click", () => { state.link = !state.link; onControlChange(); });
 let qTimer;
 $("search").addEventListener("input", e => {
   clearTimeout(qTimer);
@@ -663,13 +677,15 @@ function overviewSeries(recs, series){
 
 // Indices where a release was tagged / the measurement regime changed, plus
 // each record's environment-segment id (`seg[i]` increments at every change).
+// With state.link everything stays in segment 0: the dotted markers remain but
+// lines connect through them and percent baselines don't restart.
 function markerIndices(recs){
   const rel = [], env = [], seg = new Array(recs.length).fill(0);
   for(let i = 0; i < recs.length; i++){
     if(state.releasesBySha[recs[i].commit]) rel.push(i);
     if(i > 0){
       seg[i] = seg[i-1];
-      if(regimeKey(recs[i]) !== regimeKey(recs[i-1])){ env.push(i); seg[i]++; }
+      if(regimeKey(recs[i]) !== regimeKey(recs[i-1])){ env.push(i); if(!state.link) seg[i]++; }
     }
   }
   return { rel, env, seg };
@@ -737,7 +753,9 @@ function renderGraphsPage(host){
   if(markers.env.length){
     const n = el("div","ov-note");
     n.textContent = markers.env.length + " environment change" + (markers.env.length>1?"s":"") +
-      " in range (dotted lines) — percent changes restart from each environment's own first commit";
+      " in range (dotted lines) — " + (state.link
+        ? "lines connect through them and percent changes are vs the range's first commit"
+        : "percent changes restart from each environment's own first commit; \"Link env\" draws through them");
     host.appendChild(n);
   }
 
@@ -844,7 +862,8 @@ function deltaChip(s){
   if(pct == null || Math.abs(pct) < CHIP_EPS){ chip.classList.add("flat"); chip.textContent = pct == null ? "—" : "· " + fmtPct(pct); }
   else if(pct > 0){ chip.classList.add("bad"); chip.textContent = "▲ " + fmtPct(pct); }
   else { chip.classList.add("good"); chip.textContent = "▼ " + fmtPct(pct); }
-  chip.title = "vs first value in the current environment (within range)";
+  chip.title = state.link ? "vs first value in range"
+                          : "vs first value in the current environment (within range)";
   return chip;
 }
 
@@ -1317,9 +1336,15 @@ function hoverPlugin(c){
       if(tag){ const t = el("span","tag"); t.textContent = tag; head.appendChild(t); }
       tt.appendChild(head);
       if(r.message){ const m = el("div","msg"); m.textContent = r.message; tt.appendChild(m); }
-      if(c.markers.env.includes(idx)){
-        const e = el("div","msg");
-        e.textContent = "env changed: " + envChangeDesc(c.recs[idx-1], r);
+      // The cursor snaps to the nearest commit, but the dotted env line (and
+      // its "env" label, drawn just right of it) is what people aim for — so
+      // also match markers within a small pixel distance of the cursor.
+      const envIdx = c.markers.env.includes(idx) ? idx :
+        c.markers.env.find(i => Math.abs(u.valToPos(u.data[0][i], "x") - u.cursor.left) <= 15);
+      if(envIdx != null){
+        const e = el("div","env");
+        const b = el("b"); b.textContent = "measurement environment changed";
+        e.append(b, envChangeDesc(c.recs[envIdx-1], c.recs[envIdx]));
         tt.appendChild(e);
       }
       const row = el("div","num");
@@ -1332,7 +1357,7 @@ function hoverPlugin(c){
         const pv = (base > 0 && v != null) ? (v/base - 1)*100 : null;
         if(pv != null){
           const d = el("span","delta " + (Math.abs(pv) < CHIP_EPS ? "" : pv > 0 ? "bad" : "good"));
-          d.textContent = "  " + fmtPct(pv) + (c.markers.env.length ? " vs env start" : " vs start");
+          d.textContent = "  " + fmtPct(pv) + (!state.link && c.markers.env.length ? " vs env start" : " vs start");
           row.append(d);
         }
       }
