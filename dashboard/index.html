@@ -54,15 +54,16 @@
   .bar { position: sticky; top: 0; z-index: 5; border-block: 1px solid var(--hairline);
          background: color-mix(in srgb, var(--bg) 82%, transparent);
          backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-  .bar-inner { max-width: 1360px; margin: 0 auto; padding: 9px 20px;
-               display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .bar-inner { max-width: 1360px; margin: 0 auto; padding: 8px 20px;
+               display: flex; flex-direction: column; gap: 7px; }
+  .bar-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .tabs { display: flex; gap: 2px; background: var(--card); border: 1px solid var(--hairline);
           border-radius: 8px; padding: 2px; }
   .tabs button { border: 0; background: none; padding: 4px 12px; border-radius: 6px;
                  color: var(--muted); cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; }
   .tabs button[aria-pressed=true] { background: color-mix(in srgb, var(--series) 12%, transparent);
                                     color: var(--ink); }
-  .bar input[type=search] { flex: 1 1 112px; min-width: 108px; max-width: 260px;
+  .bar input[type=search] { flex: 1 1 220px; min-width: 150px; max-width: 340px;
     padding: 6px 10px; border: 1px solid var(--hairline); border-radius: 8px;
     background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
   .seg { display: inline-flex; border: 1px solid var(--hairline); border-radius: 8px;
@@ -247,22 +248,26 @@
 </header>
 <div class="bar">
   <div class="bar-inner">
-    <nav class="tabs" id="tabs" aria-label="Pages"></nav>
-    <input type="search" id="search" placeholder="Filter benchmarks…" autocomplete="off" aria-label="Filter benchmarks">
-    <div class="seg" id="statSeg" role="group" aria-label="Statistic"></div>
-    <div class="seg" id="viewSeg" role="group" aria-label="Scale">
-      <button id="vPct" aria-pressed="true">% change</button>
-      <button id="vAbs" aria-pressed="false">Absolute</button>
+    <div class="bar-row">
+      <nav class="tabs" id="tabs" aria-label="Pages"></nav>
+      <input type="search" id="search" placeholder="Filter benchmarks…" autocomplete="off" aria-label="Filter benchmarks">
+      <span class="meta" id="submeta"></span>
     </div>
-    <div class="seg" id="linkSeg" role="group" aria-label="Environment changes" hidden>
-      <button id="vLink" aria-pressed="false"
-        title="Draw lines through environment changes (dotted lines) instead of breaking, with percent changes relative to the range's first commit">Link env</button>
+    <div class="bar-row">
+      <div class="seg" id="statSeg" role="group" aria-label="Statistic"></div>
+      <div class="seg" id="viewSeg" role="group" aria-label="Scale">
+        <button id="vPct" aria-pressed="true">% change</button>
+        <button id="vAbs" aria-pressed="false">Absolute</button>
+      </div>
+      <div class="seg" id="linkSeg" role="group" aria-label="Environment changes" hidden>
+        <button id="vLink" aria-pressed="false"
+          title="Draw lines through environment changes (dotted lines) instead of breaking, with percent changes relative to the range's first commit">Link env</button>
+      </div>
+      <div class="seg" id="rangeSeg" role="group" aria-label="Time range"></div>
+      <span class="dates">
+        <input type="date" id="dFrom" aria-label="From date">–<input type="date" id="dTo" aria-label="To date">
+      </span>
     </div>
-    <div class="seg" id="rangeSeg" role="group" aria-label="Time range"></div>
-    <span class="dates">
-      <input type="date" id="dFrom" aria-label="From date">–<input type="date" id="dTo" aria-label="To date">
-    </span>
-    <span class="meta" id="submeta"></span>
   </div>
 </div>
 <main>
