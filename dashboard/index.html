@@ -134,8 +134,8 @@
   .chip.bad  { color: var(--bad);  background: var(--chip-bad); }
   .chip.flat { color: var(--muted); background: var(--chip-flat); }
   .chip.rel  { color: var(--release); background: color-mix(in srgb, var(--release) 12%, transparent); }
-  .bench .plot { height: 132px; }
-  .ov-chart .plot { height: 224px; }
+  .bench .plot { height: 148px; }
+  .ov-chart .plot { height: 240px; }
   /* pan-y: vertical swipes still scroll the page; horizontal drags drive the cursor */
   .plot .u-over { cursor: crosshair; touch-action: pan-y; }
 
@@ -1209,6 +1209,42 @@ function renderCommitsPage(host){
 
 // --- charts ------------------------------------------------------------------
 
+// X tick labels: a second line anchors coarse ticks to their period — the
+// year under months/days, the date under hours — but only where it adds
+// information: at period boundaries, and on the first tick when the period
+// isn't the current one. "Jun Jul" in a recent 3-month view needs no year;
+// the same view of an old year gets one.
+const X_FMT = {
+  y: uPlot.fmtDate("{YYYY}"), mo: uPlot.fmtDate("{MMM}"), d: uPlot.fmtDate("{D} {MMM}"),
+  hm: uPlot.fmtDate("{HH}:{mm}"), s: uPlot.fmtDate("{HH}:{mm}:{ss}"),
+  dmy: uPlot.fmtDate("{D} {MMM} {YYYY}"),
+};
+function xTickValues(u, splits, axisIdx, foundSpace, foundIncr){
+  const now = new Date();
+  let prev = null;
+  return splits.map(t => {
+    const d = new Date(t * 1000);
+    let label, sub = "";
+    const yearNews = prev ? d.getFullYear() !== prev.getFullYear()
+                          : d.getFullYear() !== now.getFullYear();
+    if(foundIncr >= 31536000) label = X_FMT.y(d);
+    else if(foundIncr >= 2419200){
+      label = X_FMT.mo(d);
+      if(yearNews) sub = "\n" + d.getFullYear();
+    } else if(foundIncr >= 86400){
+      label = X_FMT.d(d);
+      if(yearNews) sub = "\n" + d.getFullYear();
+    } else {
+      label = foundIncr >= 60 ? X_FMT.hm(d) : X_FMT.s(d);
+      const dayNews = !prev || d.getDate() !== prev.getDate() ||
+                      d.getMonth() !== prev.getMonth() || d.getFullYear() !== prev.getFullYear();
+      if(dayNews) sub = "\n" + (yearNews ? X_FMT.dmy(d) : X_FMT.d(d));
+    }
+    prev = d;
+    return label + sub;
+  });
+}
+
 function initChart(c){
   if(c.chart) return;
   const isOverview = c.kind === "overview";
@@ -1251,8 +1287,9 @@ function initChart(c){
     scales: { x: { time: true } },
     series: [ {}, ...ysSplit.map(mkSeries) ],
     axes: [
-      { stroke: getVar("--faint"), font: axisFont, size: COARSE ? 42 : 26, space: COARSE ? 100 : 80,
-        grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 } },
+      { stroke: getVar("--faint"), font: axisFont, size: COARSE ? 58 : 42, space: COARSE ? 100 : 80,
+        grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 },
+        values: xTickValues },
       { stroke: getVar("--faint"), font: axisFont, size: autoAxisSize,
         space: labeled ? (COARSE ? 42 : 34) : (COARSE ? 38 : 30), gap: 4,
         grid: { stroke: getVar("--grid"), width: 1 }, ticks: { show: false },
