@@ -1,227 +1,288 @@
 # Tachometer
 
-Tachometer runs a package's benchmark suite at two git revisions and reports the
-difference as a pull request comment: benchmark the base branch and the PR, and
-point out the benchmarks that changed.
+Tachometer compares a Julia package's benchmarks at two git revisions and
+reports the result on a pull request. It uses
+[BenchmarkTools](https://github.com/JuliaCI/BenchmarkTools.jl), so benchmark
+suites written for PkgBenchmark or AirspeedVelocity will usually work unchanged.
 
-It expects a `benchmark/benchmarks.jl` that defines `const SUITE = BenchmarkGroup()`
-— the same layout PkgBenchmark and AirspeedVelocity use, so an existing suite
-works unchanged. For each revision it checks the source out into a temporary
-`git worktree`, runs the suite in a separate Julia process, and takes the minimum
-time per benchmark with BenchmarkTools.
+Each committed revision is checked out in a temporary git worktree and benchmarked
+in a separate Julia process. Tachometer does not modify the package checkout.
 
-## The comment
+## Set up a benchmark suite
 
-There is a single comment per PR, updated in place on each push. When nothing
-regressed it is a status line and a collapsed table of the full results:
+The default entrypoint is `benchmark/benchmarks.jl`. It must assign a
+`BenchmarkGroup` named `SUITE`:
 
-```
-### 🟢 Tachometer — no performance regressions detected
-42 benchmarks compared · `d2de5a1` → `60ab91e` · Julia 1.11 · 5% tolerance
-<details><summary>Full results (42 benchmarks)</summary> … </details>
-```
+```julia
+using BenchmarkTools
+using MyPackage
 
-When something regressed, the changed benchmarks come first, largest change first,
-with the before/after times and the percentage change:
-
-```
-### 🔴 Tachometer — 2 regressions, 1 improvement
-42 benchmarks compared · `d2de5a1` → `60ab91e` · Julia 1.11 · 5% tolerance · 3× runs
-
-|    | Benchmark          | Time                    | Memory              |
-|:--:|:-------------------|:------------------------|:--------------------|
-| 🔴 | `assembly/global`  | 10.2 ms → 14.5 ms (+42%)| —                   |
-| 🔴 | `dofs/close!`      | 9.1 µs → 10.1 µs (+10%) | 1 KiB → 4 KiB (+300%)|
-| 🟢 | `mesh/generate`    | 2.4 ms → 1.87 ms (−22%) | —                   |
+SUITE = BenchmarkGroup()
+SUITE["scalar"] = @benchmarkable MyPackage.f(1)
+SUITE["array"] = @benchmarkable MyPackage.f(x) setup=(x = rand(1_000))
 ```
 
-Benchmarks that did not change stay in the collapsed "Full results" section.
-Benchmarks that exist in only one of the revisions, or that could not be compared,
-are listed separately and do not affect the verdict.
+Put dependencies used only by benchmarks in `benchmark/Project.toml`. Tachometer
+copies this environment for each run, adds the package revision being tested,
+and makes `BenchmarkTools` available. The source checkout and benchmark
+environment are left unchanged.
 
-If there is no baseline, the suite fails to run, or there is nothing to compare,
-the comment says so (yellow) rather than reporting success.
+If the entrypoint is elsewhere, set the action's `script` input to its path,
+relative to the package root.
 
-## Setup
+## Set up GitHub Actions
 
-Tachometer is a composite GitHub Action. Copy the workflows you need from
-[`examples/`](examples). The two PR setups are alternatives — pick one, then add
-[`track.yml`](examples/track.yml) if you also want the history dashboard:
+Choose one of the supplied PR setups:
 
-| | PR comments | + history |
-|---|---|---|
-| Fork PRs supported | `benchmark.yml` + `report.yml` | `+ track.yml` |
-| Same-repo PRs only | `simple.yml` | `+ track.yml` |
+| PRs to benchmark | Copy to `.github/workflows/` |
+|---|---|
+| Same-repository and fork PRs | [`benchmark.yml`](examples/benchmark.yml) and [`report.yml`](examples/report.yml) |
+| Same-repository PRs only | [`simple.yml`](examples/simple.yml) |
 
-- [`benchmark.yml`](examples/benchmark.yml) + [`report.yml`](examples/report.yml):
-  use this if PRs can come from forks. The action itself only measures and uploads
-  the report as an artifact; a separate workflow posts the comment. That split is
-  what makes fork PRs safe: the `pull_request` job runs the PR's (untrusted)
-  benchmark code with a read-only token and no secrets, and the `workflow_run` job
-  — which has write access but never runs PR code — posts the comment. The trusted
-  job re-renders the comment from the structured `report.json` rather than posting
-  fork-produced markdown, so a fork can influence the numbers in the comment but
-  not inject arbitrary markup or redirect the comment to another PR.
-- [`simple.yml`](examples/simple.yml): a single job that benchmarks and comments.
-  Only works for PRs from the same repository. Do not change it to
-  `pull_request_target` to get around that — that runs untrusted code with a
-  write token.
+These are alternatives. Do not install all three workflows. The simple action
+posts directly; the fork-safe setup keeps measurement and commenting in separate
+security contexts.
+
+### Fork-safe setup
+
+Use this setup for public repositories or any repository that accepts PRs from
+forks.
+
+1. Copy [`benchmark.yml`](examples/benchmark.yml) and
+   [`report.yml`](examples/report.yml) to `.github/workflows/`.
+2. Choose a reviewed Tachometer commit and use its full 40-character SHA in
+   both files:
+
+   - In `benchmark.yml`, replace
+     `KristofferC/Tachometer.jl@v1` with
+     `KristofferC/Tachometer.jl@<full-commit-sha>`.
+   - In `report.yml`, replace the all-zero SHA in the reporter action with the
+     same SHA.
+
+3. Change the `branches` filters to match the package's default branch.
+4. Check the Julia version and benchmark runner. `benchmark.yml` uses the
+   action's Julia `1` default and `ubuntu-24.04-arm`.
+5. Commit both workflows to the default branch. The reporting workflow becomes
+   active only after it is present there.
+
+If you rename the benchmark workflow, keep its top-level `name` in sync with
+`workflows: [...]` in `report.yml`.
+
+The two workflows form a security boundary. `benchmark.yml` runs code from the
+PR with a read-only token and uploads structured results. `report.yml` has
+permission to comment, but runs trusted code from the default branch and
+re-renders the comment itself. Do not replace this setup with
+`pull_request_target`.
+
+### Same-repository setup
+
+If all benchmarked PRs come from branches in the same repository:
+
+1. Copy [`simple.yml`](examples/simple.yml) to `.github/workflows/`.
+2. Replace `KristofferC/Tachometer.jl@v1` with a full Tachometer commit SHA.
+3. Change the `branches` filters, Julia version, and runner as needed.
+4. Commit the workflow.
+
+This workflow benchmarks and comments in one job. It deliberately skips fork
+PRs.
+
+Both setups keep one Tachometer comment per PR and update it after each push.
+While a new run is in progress, the existing comment is marked as stale.
+
+> [!IMPORTANT]
+> The examples ignore documentation-only changes. Remove `paths-ignore` if the
+> benchmark workflow will be a required check. A workflow skipped by a path
+> filter does not report a check result.
+
+### Choosing a runner
+
+The examples use `ubuntu-24.04-arm`, which has produced less benchmark noise
+than the standard shared x64 and macOS runners in this project's testing. It is
+free only for public repositories, and it exercises AArch64 rather than x86_64
+code paths.
+
+Use `ubuntu-latest` or a controlled self-hosted runner if AArch64 is not suitable.
+Use the same runner, Julia version, and thread count for PR comparisons and
+default-branch tracking.
+
+## Configure the comparison
+
+The supplied workflows start with three interleaved runs, a 5% time tolerance,
+and a 1 µs time floor. These are reasonable initial settings for a shared runner;
+adjust them after observing the suite.
 
 ```yaml
-- uses: KristofferC/Tachometer.jl@<commit-sha>
+- id: bench
+  uses: KristofferC/Tachometer.jl@<full-commit-sha>
   with:
+    julia-version: "1.11"
     nruns: "3"
-    time-tolerance: "0.05"
+    time-tolerance: "5%"
     time-floor: "1us"
+    fail-on-regression: "true"
 ```
 
-Because the comment is updated in place, a push leaves the previous commit's
-numbers on the PR while the new run is in progress. Both setups mark this: as soon
-as a new run starts, the existing comment gets a note saying the results below are
-from an earlier commit, and the finished report replaces the whole comment. If you
-run a benchmark matrix with several `marker` values, call
-[`mark-running.sh`](scripts/mark-running.sh) once per marker.
+Keep `fetch-depth: 0` on the package checkout. Tachometer needs the commit
+history to find a merge-base and tags to find release baselines. The supplied
+workflows already set it.
 
-## What counts as a regression
+### Inputs
 
-A benchmark is reported as a regression only if the change is both relatively and
-absolutely large enough, and holds up across repeated runs:
+These are the action defaults. Values set in the example workflows override
+them.
 
-- **Tolerance and floor.** The time ratio has to exceed `1 + time-tolerance`
-  (default 5%) *and* the absolute change has to exceed `time-floor` (default
-  1 µs). The floor is on the change, not on the benchmark's size, so a +40% wiggle
-  on a 200 ns benchmark (an 80 ns change) is ignored while a 200 ns → 2 µs change
-  is not. Memory has its own tolerance (default 5%) and byte floor. A benchmark
-  that allocated nothing and now allocates is always reported, whatever the
-  tolerance.
+| Input | Default | Meaning |
+|---|---:|---|
+| `julia-version` | `1` | Julia version accepted by `julia-actions/setup-julia` |
+| `package` | `.` | Path to the package's git checkout |
+| `script` | `benchmark/benchmarks.jl` | Benchmark entrypoint relative to `package` |
+| `baseline` | PR merge-base; otherwise `HEAD~1` | Revision used as the baseline |
+| `target` | PR head; otherwise `HEAD` | Revision being tested |
+| `time-tolerance` | `5%` | Relative time change required to report a change; `0.05` also works |
+| `memory-tolerance` | `5%` | Relative memory change required to report a change; `0.05` also works |
+| `time-floor` | `1us` | Absolute time change also required |
+| `memory-floor` | `0` | Absolute memory change also required; accepts bytes or sizes such as `1 KiB` |
+| `nruns` | `1` | Interleaved baseline/target passes; every pass must agree |
+| `threads` | `1` | `JULIA_NUM_THREADS` used by benchmark processes |
+| `verbose` | `true` | Print benchmark names and subprocess output to the job log |
+| `fail-on-regression` | `false` | Fail the job when a regression is confirmed |
+| `release-baseline` | `true` | On a version bump, compare with the previous release |
+| `marker` | `tachometer` | Sticky-comment identifier |
+| `noise-history` | `auto` | Fetch tracking data from `gh-pages`; use `none` to disable or provide a data-directory path |
+| `comment` | `false` | Post the PR comment directly (same-repository PRs only) |
 
-- **Trade-offs.** A benchmark that got *faster* while allocating more is reported
-  as 🟡 "memory trade-off": it is shown in the table for a human to weigh, but it
-  does not make the comment red and does not fail the job. The reverse — slower
-  but allocating less — is still a regression.
+The action exposes three outputs:
 
-- **Repeated runs.** With `nruns > 1` the baseline and target are run
-  interleaved, alternating which goes first, and a benchmark is only reported if
-  every run agrees. This costs time but removes most one-off blips.
+| Output | Meaning |
+|---|---|
+| `status` | `ok`, `regressed`, `not_comparable`, or `errored` |
+| `regressed` | `true` when at least one regression was confirmed |
+| `report` | Path to the rendered Markdown report |
 
-- **Learned noise.** Some benchmarks are just noisy on shared CI runners. If you
-  point `noise-history` at the published default-branch history (the `data/`
-  directory that `track.yml` produces — the example workflows fetch it from
-  `gh-pages`), Tachometer estimates how much each benchmark naturally moves
-  run-to-run on the default branch and widens that benchmark's tolerance
-  accordingly, up to a cap (default 50%) so a large real regression is never
-  hidden. Only history from the same OS, architecture, and Julia version is used.
-  The history is read-only for PRs — a PR never writes to it, so a PR cannot
-  influence what counts as noise. A change that sits inside the learned spread is
-  listed in a "suppressed as noise" section rather than dropped.
+Set `fail-on-regression: "true"` to use Tachometer as a required performance
+check. Gating happens after the report artifact is uploaded, so the PR still
+gets a comment when the check fails. The action does not gate when Julia files
+in the benchmark script's directory changed between the revisions, because the
+suites may no longer be comparable.
 
-## Version bumps
+For a benchmark matrix, give every job a distinct `marker` and list those
+markers in the reporter action; `report.yml` contains an example.
 
-When a PR bumps the `version` in `Project.toml`, the interesting comparison is
-usually not the merge-base but the last release: the bump is about to become a
-tag, and this is the moment to catch regressions that accumulated over the whole
-release cycle. So with `release-baseline` on (the default), if the target's
-version is higher than the baseline's, Tachometer compares against the previous
-`vX.Y.Z` release tag instead and notes this in the comment. It has no effect on
-PRs that don't raise the version.
+## How results are judged
 
-This needs the tags to be present — check out with `fetch-depth: 0`.
+Tachometer records the minimum time reported by BenchmarkTools for each
+benchmark pass.
 
-## Tracking the default branch over time
+A time or memory change must pass both its relative tolerance and its absolute
+floor. With the defaults, a change from 200 ns to 280 ns is ignored: the 40%
+difference is large enough, but the 80 ns absolute difference is below
+`time-floor`. A change from 200 ns to 2 µs passes both thresholds. Going from no
+memory allocation to any allocation is always a regression.
 
-Separately from PR comparisons, [`track.yml`](examples/track.yml) records the
-absolute results of each push to the default branch and publishes an interactive
-time-series dashboard to GitHub Pages: each benchmark over time, filterable by
-name, with a time/memory toggle, release markers, and points that link to the
-commit. Each record also carries the OS, architecture, Julia version, and CPU,
-and the dashboard marks where those changed so a runner change isn't mistaken
-for a performance change.
+When `nruns` is greater than one, baseline and target runs are interleaved and
+their order alternates. A change is reported only if every pass agrees.
 
-The dashboard is a static page (vendored [uPlot](https://github.com/leeoniya/uPlot),
-no build step, no CDN). History is stored as one JSON file per calendar year plus
-a small manifest, so neither the download nor the `gh-pages` git history grows
-unboundedly. Release markers are recomputed from `vX.Y.Z` tags on every publish,
-so a tag created after the commit (e.g. by TagBot) still shows up.
+A benchmark that becomes faster while using more memory is shown as a memory
+trade-off and does not fail the check. A benchmark that becomes slower while
+using less memory is still a regression.
 
-Everything is published under a subdirectory (default `benchmarks/`) of the Pages
-branch, and only that subdirectory is ever touched, so it coexists with
-Documenter on the same `gh-pages` branch — the publish step fetches, merges, and
-pushes with a retry loop, so a concurrent `deploydocs` neither clobbers it nor is
-clobbered. The site ends up at `https://OWNER.github.io/REPO/benchmarks/`.
+Benchmarks present in only one revision are listed separately and do not affect
+the verdict. An unavailable baseline or a result with nothing in common is
+`not_comparable`; a revision, build, or benchmark failure is `errored`. Neither
+is presented as a successful comparison.
 
-Setup: GitHub Pages must be set to "Deploy from a branch: `gh-pages` / root", and
-the workflow needs `contents: write`.
+If `noise-history` is set, Tachometer learns a separate time tolerance for each
+benchmark from matching default-branch history. It uses only records with the
+same OS, architecture, Julia version, and thread count, and caps the learned
+tolerance at 50%. PR runs read this history but never write to it.
 
-## Choosing a runner
+### Version bumps
 
-The examples use `ubuntu-24.04-arm`: in a null experiment (identical code
-benchmarked against itself) it had roughly half the run-to-run noise of
-`ubuntu-latest` and a quarter of `macos-latest`, whose spread was wide enough
-that only very large regressions could be caught without false positives.
+When a PR raises the version in `Project.toml`, the action normally compares it
+with the highest reachable `vX.Y.Z` tag below the new version instead of the PR
+merge-base. This catches regressions accumulated since the previous release.
 
-Two caveats: arm runners are free for **public repos only**, and **it's
-aarch64** — a regression confined to x86-specific code paths won't show. If
-either forces you onto `ubuntu-latest`, expect to loosen `time-tolerance` and
-lean harder on `nruns` and the noise history.
+Set `release-baseline: "false"` to keep the normal merge-base. If no suitable
+tag is available, Tachometer keeps the merge-base and notes this in the report.
 
-Use the **same runner** for the PR workflow and `track.yml`: the noise model
-only learns from history on the same OS, architecture, and Julia version, so
-switching runners resets it.
+## Track the default branch
+
+[`track.yml`](examples/track.yml) records benchmark results on default-branch
+pushes and publishes a static dashboard at:
+
+```text
+https://OWNER.github.io/REPOSITORY/benchmarks/
+```
+
+To enable it:
+
+1. Copy `examples/track.yml` to `.github/workflows/`.
+2. In both `Install Tachometer` steps, change the install call to:
+
+   ```julia
+   Pkg.add(
+       url = "https://github.com/KristofferC/Tachometer.jl",
+       rev = "<full-commit-sha>",
+   )
+   ```
+
+   Use the same Tachometer commit as the PR workflows.
+
+3. Match the Julia version and runner used by the PR workflow. Both templates
+   use one thread. If the PR workflow sets `threads` to another value, set
+   `TACHOMETER_THREADS` to the same value in the `Record` step.
+4. In the repository's Pages settings, select **Deploy from a branch**,
+   `gh-pages`, and `/ (root)`.
+
+The first successful publish creates the `gh-pages` branch. The PR workflow
+examples read the history from that branch automatically; before any history
+exists, they use the fixed tolerances.
+
+The dashboard is written only below `benchmarks/`, so it can share a Pages
+branch with Documenter.
 
 ## Local use
+
+Install Tachometer from the repository if it is not already in the active
+environment:
+
+```julia
+using Pkg
+Pkg.add(
+    url = "https://github.com/KristofferC/Tachometer.jl",
+    rev = "<full-commit-sha>",
+)
+```
+
+Then compare the current working tree, including uncommitted changes, with its
+current `HEAD`:
 
 ```julia
 using Tachometer
 
-# Working tree against master:
-report = compare("."; baseline = "master")
-print(render(report))
-
-# Two explicit revisions, three interleaved runs. `noise_history` (optional) is
-# a path to a published time-series `data/` directory (read-only):
-report = compare("path/to/Pkg";
-    baseline = "v1.2.0",
-    target   = "my-branch",
-    nruns    = 3,
-    noise_history = nothing,
-)
-
-# By default each benchmark is named as it runs and the output is streamed, so a
-# long comparison can be watched. Pass `verbose = false` for a quiet run:
-report = compare("."; baseline = "master", verbose = false)
+compare()
 ```
 
-`baseline`/`target` are git refs; `target` may also be `Tachometer.WORKINGTREE`
-(the default) to benchmark the current working tree, uncommitted changes included.
+The returned report displays a compact summary at the REPL. Use
+`print(render(report))` when you specifically want the GitHub-flavoured Markdown.
 
-## Options
+To compare the whole branch with `main`, or compare two explicit revisions:
 
-| Option | Default | Meaning |
-|---|---|---|
-| `julia-version` | `1` | Julia version to benchmark with |
-| `package` | `.` | Path to the package to benchmark |
-| `script` | `benchmark/benchmarks.jl` | Suite entrypoint, defines `SUITE` |
-| `baseline` | merge-base of the PR | Revision to compare against |
-| `target` | PR head / working tree | Revision under test |
-| `time-tolerance` | `0.05` | Relative time change to report |
-| `memory-tolerance` | `0.05` | Relative memory change to report |
-| `time-floor` | `1us` | Absolute time change also required |
-| `memory-floor` | `0` | Absolute byte change also required |
-| `nruns` | `1` | Interleaved runs; all must agree |
-| `threads` | `1` | `JULIA_NUM_THREADS` for the benchmark processes |
-| `verbose` | `true` | Name each benchmark in the job log as it runs |
-| `fail-on-regression` | `false` | Fail the job on a regression |
-| `release-baseline` | `true` | On a version bump, compare against the last release tag |
-| `marker` | `tachometer` | Comment namespace; give matrix jobs distinct markers |
-| `noise-history` | — | Path to the default-branch time-series `data/` directory |
+```julia
+compare(; baseline = "main")
 
-The measurement options are also keyword arguments to `compare` (with
-underscores instead of dashes).
+compare("path/to/MyPackage";
+    baseline = "v1.2.0",
+    target = "feature-branch",
+    nruns = 3,
+    verbose = false,
+)
+```
 
-`fail-on-regression` fails the job in a final step, after the report artifact has
-been uploaded, so the comment is still posted. It is skipped when the benchmark
-suite itself changed between the two revisions, since the comparison is then not
-apples-to-apples.
+`baseline` and `target` accept git revisions. The local defaults are `HEAD` and
+`WORKINGTREE`, respectively; `release_baseline` defaults to `false`.
+Action inputs that also exist as `compare` keywords use underscores instead of
+dashes.
 
 ## License
 

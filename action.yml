@@ -1,9 +1,8 @@
 name: "Tachometer"
 description: >-
   Benchmark a Julia package at two git revisions and produce a compact
-  performance-regression report. This action only *measures* and writes an
-  artifact — posting the PR comment is a separate, trusted job (see
-  examples/report.yml), which keeps it safe to run on untrusted fork PRs.
+  performance-regression report. It can post the comment directly for trusted
+  same-repository PRs; fork PRs use the separate, trusted reporter action.
 author: "Kristoffer Carlsson"
 branding:
   icon: activity
@@ -17,7 +16,7 @@ inputs:
     description: "Path to the package to benchmark (a git working copy)."
     default: "."
   script:
-    description: "Benchmark entrypoint, relative to `package`. Must define `const SUITE`."
+    description: "Benchmark entrypoint, relative to `package`. Must assign a BenchmarkGroup to `SUITE`."
     default: "benchmark/benchmarks.jl"
   baseline:
     description: "Baseline git ref. Defaults to the merge-base of the PR base and head."
@@ -26,16 +25,16 @@ inputs:
     description: "Target git ref. Defaults to the PR head SHA."
     default: ""
   time-tolerance:
-    description: "Relative time change (0.05 = 5%) needed to flag a regression."
-    default: "0.05"
+    description: "Relative time change needed to flag a regression (for example, 5% or 0.05)."
+    default: "5%"
   memory-tolerance:
-    description: "Relative memory change (0.05 = 5%) needed to flag a regression."
-    default: "0.05"
+    description: "Relative memory change needed to flag a regression (for example, 5% or 0.05)."
+    default: "5%"
   time-floor:
     description: "Absolute time change a regression must also clear, e.g. 1us, 500ns, 2ms."
     default: "1us"
   memory-floor:
-    description: "Absolute memory change (bytes) a regression must also clear."
+    description: "Absolute memory change a regression must also clear, in bytes or a size such as 1 KiB."
     default: "0"
   nruns:
     description: "Interleaved baseline/target passes. >1 requires every pass to agree."
@@ -62,10 +61,14 @@ inputs:
     default: "tachometer"
   noise-history:
     description: >-
-      Path to a checkout of the default-branch time-series data dir (the `data/`
-      produced by track.yml), used READ-ONLY to derive the per-benchmark noise
-      band. Empty disables the noise model (plain tolerance only).
-    default: ""
+      Noise model source: auto fetches tracking data from gh-pages, none disables
+      it, and a path uses an existing time-series data directory.
+    default: "auto"
+  comment:
+    description: >-
+      Post and update the PR comment directly. Use only for same-repository PRs;
+      fork-safe setups should use the reporter action instead.
+    default: "false"
 
 outputs:
   status:
@@ -81,12 +84,52 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Mark previous results as re-running
+      if: >-
+        inputs.comment == 'true' &&
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TACHO_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        bash "$TACHO_ACTION_PATH/scripts/mark-running.sh" \
+          "${{ github.repository }}" \
+          "${{ github.event.pull_request.number }}" \
+          "${{ inputs.marker }}" \
+          "${{ github.event.pull_request.head.sha }}" \
+          "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
     # Pin these to immutable commit SHAs in production (kept as tags here for readability).
     - uses: julia-actions/setup-julia@v2
       with:
         version: ${{ inputs.julia-version }}
 
     - uses: julia-actions/cache@v2
+
+    - name: Locate benchmark history
+      id: history
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+        REQUESTED: ${{ inputs.noise-history }}
+      run: |
+        set -euo pipefail
+        if [ "$REQUESTED" = "none" ] || [ "$REQUESTED" = "off" ] || [ -z "$REQUESTED" ]; then
+          echo "path=" >> "$GITHUB_OUTPUT"
+        elif [ "$REQUESTED" != "auto" ]; then
+          echo "path=$REQUESTED" >> "$GITHUB_OUTPUT"
+        else
+          dest="${RUNNER_TEMP}/tacho-history"
+          rm -rf "$dest"
+          mkdir -p "$dest"
+          if git -C "$PACKAGE" fetch --no-tags --depth=1 origin gh-pages 2>/dev/null; then
+            git -C "$PACKAGE" archive FETCH_HEAD benchmarks/data 2>/dev/null \
+              | tar -x -C "$dest" 2>/dev/null || true
+          fi
+          echo "path=$dest/benchmarks/data" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Resolve revisions
       id: refs
@@ -138,7 +181,7 @@ runs:
         TACHOMETER_VERBOSE: ${{ inputs.verbose }}
         TACHOMETER_RELEASE_BASELINE: ${{ inputs.release-baseline }}
         TACHOMETER_MARKER: ${{ inputs.marker }}
-        TACHOMETER_NOISE_HISTORY: ${{ inputs.noise-history }}
+        TACHOMETER_NOISE_HISTORY: ${{ steps.history.outputs.path }}
         TACHOMETER_OUTPUT_DIR: ${{ github.workspace }}/tachometer-report
         TACHOMETER_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         TACHO_PATH: ${{ github.action_path }}
@@ -170,6 +213,24 @@ runs:
         name: tachometer-report-${{ inputs.marker }}
         path: ${{ github.workspace }}/tachometer-report
         retention-days: 7
+
+    - name: Post PR comment
+      if: >-
+        always() &&
+        inputs.comment == 'true' &&
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        steps.run.outputs.report != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TACHO_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        bash "$TACHO_ACTION_PATH/scripts/comment.sh" \
+          "${{ github.repository }}" \
+          "${{ github.event.pull_request.number }}" \
+          "${{ inputs.marker }}" \
+          "${{ steps.run.outputs.report }}"
 
     # Gating runs LAST, after the artifact is safely uploaded, so a gated failure
     # never prevents the report from being produced or posted.

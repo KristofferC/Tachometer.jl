@@ -17,7 +17,8 @@
 using Statistics: median
 
 """
-    compare(repo; baseline, target=WORKINGTREE, script="benchmark/benchmarks.jl",
+    compare(repo="."; baseline="HEAD", target=WORKINGTREE,
+            script="benchmark/benchmarks.jl",
             time_tolerance=0.05, memory_tolerance=0.05,
             time_floor="1us", memory_floor=0, nruns=1,
             env=Dict(), threads=1, retune=false, verbose=true, stream=verbose,
@@ -27,18 +28,22 @@ Benchmark `repo` (a path to a git working copy of the package) at two revisions
 and report the performance difference. `baseline`/`target` are git refs, or the
 [`WORKINGTREE`](@ref) sentinel for the live working tree.
 
+With no arguments, compare the current working tree with its current `HEAD`.
+Tolerances accept either fractions (`0.05`) or percentages (`"5%"`).
+`memory_floor` accepts bytes or a size such as `"1 KiB"`.
+
 `verbose` (default `true`) makes each benchmark subprocess name the benchmarks as
 it runs them, and `stream` (following `verbose`) forwards that output to `io` as
 it is produced, so a long comparison can be watched instead of going silent until
 it finishes. Set both to `false` for quiet runs.
 """
 function compare(
-        repo::AbstractString;
-        baseline,
+        repo::AbstractString = ".";
+        baseline = "HEAD",
         target = WORKINGTREE,
         script::AbstractString = "benchmark/benchmarks.jl",
-        time_tolerance::Real = 0.05,
-        memory_tolerance::Real = 0.05,
+        time_tolerance = 0.05,
+        memory_tolerance = 0.05,
         time_floor = "1us",
         memory_floor = 0,
         nruns::Integer = 1,
@@ -58,8 +63,10 @@ function compare(
     )
     repo = abspath(repo)
     nruns = max(1, Int(nruns))
+    time_tolerance = _as_fraction(time_tolerance, "time tolerance")
+    memory_tolerance = _as_fraction(memory_tolerance, "memory tolerance")
     tfloor = _as_ns(time_floor)
-    mfloor = Float64(memory_floor)
+    mfloor = _as_bytes(memory_floor)
 
     # No baseline (e.g. the action couldn't find a merge-base with the base
     # branch) is a yellow "not comparable" state, never a fabricated comparison.
@@ -303,6 +310,52 @@ function _as_ns(s::AbstractString)
         unit in ("us", "µs", "μs") ? 1e3 :
         unit == "ms" ? 1e6 : 1e9
     return val * factor
+end
+
+# Parse tolerances as either their API-level fraction (`0.05`) or the notation
+# people naturally use in configuration (`"5%"`).
+function _checked_fraction(value::Float64, input, name)
+    (isfinite(value) && 0 <= value < 1) ||
+        error("invalid $(name) $(repr(input)); use a fraction from 0 to less than 1, such as 0.05, or a percentage such as \"5%\"")
+    return value
+end
+
+_as_fraction(x::Real, name = "tolerance") =
+    _checked_fraction(Float64(x), x, name)
+function _as_fraction(s::AbstractString, name = "tolerance")
+    raw = strip(s)
+    percent = endswith(raw, '%')
+    number = percent ? strip(chop(raw)) : raw
+    value = tryparse(Float64, number)
+    value === nothing && error("cannot parse $(name): $(repr(s)); use a fraction such as 0.05 or a percentage such as \"5%\"")
+    if !percent && value >= 1
+        error("invalid $(name) $(repr(s)); a value without `%` is a fraction—did you mean \"$(number)%\"?")
+    end
+    return _checked_fraction(percent ? value / 100 : value, s, name)
+end
+
+# Memory floors are easier to read as "1 KiB" than as 1024. Plain numbers keep
+# their existing byte semantics.
+function _checked_bytes(value::Float64, input)
+    (isfinite(value) && value >= 0) ||
+        error("invalid memory floor $(repr(input)); use a non-negative number of bytes or a size such as \"1 KiB\"")
+    return value
+end
+
+_as_bytes(x::Real) = _checked_bytes(Float64(x), x)
+function _as_bytes(s::AbstractString)
+    raw = strip(s)
+    m = match(r"^([0-9.]+)\s*(B|KB|KiB|MB|MiB|GB|GiB)?$"i, raw)
+    m === nothing && error("cannot parse memory floor: $(repr(s)); use bytes or a size such as \"1 KiB\"")
+    value = tryparse(Float64, m.captures[1])
+    value === nothing &&
+        error("cannot parse memory floor: $(repr(s)); use bytes or a size such as \"1 KiB\"")
+    unit = lowercase(something(m.captures[2], "b"))
+    factor = unit == "b" ? 1.0 :
+        unit == "kb" ? 1e3 : unit == "kib" ? 1024.0 :
+        unit == "mb" ? 1e6 : unit == "mib" ? 1024.0^2 :
+        unit == "gb" ? 1e9 : 1024.0^3
+    return _checked_bytes(value * factor, s)
 end
 
 function _suite_changed(baseline_runs, target_runs)
