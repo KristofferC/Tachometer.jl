@@ -704,6 +704,11 @@ let observer = null, roTimer = null;
 function teardown(){
   $("tooltip").style.display = "none";
   if(state.scrollFn){ window.removeEventListener("scroll", state.scrollFn); state.scrollFn = null; }
+  if(state.unpinFn){
+    window.removeEventListener("wheel", state.unpinFn);
+    window.removeEventListener("touchstart", state.unpinFn);
+    state.unpinFn = null;
+  }
   closeModal(false);
   for(const c of state.cards) if(c.chart) c.chart.destroy();
   if(state.overview && state.overview.chart) state.overview.chart.destroy();
@@ -784,23 +789,42 @@ function renderGraphsPage(host){
       a.append((g || "other") + " ");
       const c = el("span","cnt"); c.textContent = groups.get(g).length;
       a.appendChild(c);
+      const pair = [sec, a];
       // scrollIntoView instead of an anchor href — the hash carries app state.
-      a.addEventListener("click", e => { e.preventDefault(); sec.scrollIntoView({ behavior: "smooth" }); });
+      // Pin the clicked group: sections near the bottom may never reach the
+      // scroll-spy threshold, which would highlight an earlier group instead.
+      a.addEventListener("click", e => {
+        e.preventDefault();
+        state.navPin = pair;
+        for(const s of sections) s[1].classList.toggle("on", s === pair);
+        sec.scrollIntoView({ behavior: "smooth" });
+      });
       nav.appendChild(a);
-      sections.push([sec, a]);
+      sections.push(pair);
     }
   }
   if(nav) wrap.appendChild(nav);
   wrap.appendChild(main);
   host.appendChild(wrap);
   if(nav){
+    state.navPin = null;
     const onScroll = () => {
       let cur = sections[0];
       for(const s of sections) if(s[0].getBoundingClientRect().top <= barH + 48) cur = s;
+      if(state.navPin){
+        if(cur !== state.navPin) cur = state.navPin;   // hold until the spy agrees
+        else state.navPin = null;
+      }
       for(const s of sections) s[1].classList.toggle("on", s === cur);
     };
+    // The smooth scroll from a click also fires "scroll", so only user input
+    // (wheel/touch) releases the pin early.
+    const unpin = () => { if(state.navPin){ state.navPin = null; onScroll(); } };
     state.scrollFn = onScroll;
+    state.unpinFn = unpin;
     window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("wheel", unpin, { passive: true });
+    window.addEventListener("touchstart", unpin, { passive: true });
     onScroll();
   }
   if(state.fs && state.ctx.byKey.has(state.fs)) openModal(state.fs);
