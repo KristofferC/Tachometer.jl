@@ -30,6 +30,64 @@ environment are left unchanged.
 If the entrypoint is elsewhere, set the action's `script` input to its path,
 relative to the package root.
 
+### What makes a good suite
+
+A suite is only useful if it is cheap enough to run often. Aim for one that
+finishes in a couple of minutes — well under the package's test time. A CI job
+runs it `nruns` times per revision (six passes with the example settings), and
+a fast suite is one you will also run locally before pushing.
+
+Spend that budget on a few benchmarks that each exercise a distinct code path.
+Avoid the cartesian product of input types × sizes × options: most
+combinations run the same code and just measure it again, and every extra row
+makes the report longer and real regressions easier to overlook. Add a
+benchmark when it covers a different algorithm or kernel, not another value of
+a parameter.
+
+Set `evals = 1` on every benchmark:
+
+```julia
+SUITE["array"] = @benchmarkable MyPackage.f(x) setup=(x = rand(1_000)) evals=1
+```
+
+Before a suite runs, BenchmarkTools tunes it: every benchmark without an
+explicit `evals` is executed repeatedly to decide how many evaluations to fold
+into one sample. Tachometer tunes in each benchmark process, so with
+`nruns: "3"` an untuned suite pays that sweep six times — and because each
+revision tunes independently, a borderline benchmark can land on a different
+`evals` per side, which skews the comparison. An explicit `evals` avoids both,
+and `evals = 1` is correct for anything taking a microsecond or more. (A
+committed `benchmark/tune.json` also pins parameters, but goes stale;
+`evals = 1` doesn't.)
+
+Also worth doing:
+
+- Measure a realistic chunk of work rather than one nanosecond-scale call.
+  Per-call differences of a few nanoseconds are usually code-placement and
+  alignment churn rather than the change under test — this is what
+  `time-floor` discounts — and repeating one call in a loop amplifies that
+  churn along with the signal. A loop over a *varied* batch of inputs
+  diversifies layout and data effects and measures the throughput users
+  actually see.
+- Bound sampling time. BenchmarkTools spends up to 5 s per benchmark by
+  default; `BenchmarkTools.DEFAULT_PARAMETERS.seconds = 1` at the top of the
+  script is usually plenty, since minimum times converge quickly.
+- Make the work identical on every run: build inputs in `setup`, seed any
+  randomness that affects the timed code, and keep I/O and downloads out of
+  the suite.
+- Keep names stable. Learned noise tolerances and dashboard history are keyed
+  by benchmark name, so a rename discards its history.
+
+If a nanosecond-scale function is itself the product, it can still be tracked;
+the defaults just assume otherwise. Give it a fixed `evals` large enough that
+one sample measures a microsecond or more (`evals = 500` for a ~20 ns
+function — an explicit value is never re-tuned, so both revisions measure
+identically), lower `time-floor` to match, and expect to need a quiet runner:
+on shared hardware a few nanoseconds per call is often code-layout churn
+however it is measured. Often the more useful benchmark is throughput over a
+spread of inputs — `sum(sin, xs)` per argument range — which exercises every
+branch instead of one perfectly predicted path, and works with the defaults.
+
 ## Set up GitHub Actions
 
 Choose one of the supplied PR setups:
