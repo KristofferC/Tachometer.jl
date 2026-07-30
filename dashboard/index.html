@@ -79,8 +79,10 @@
   .bar .meta { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
   input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--series); outline-offset: 1px; }
   body[data-page="compare"] #viewSeg, body[data-page="compare"] #linkSeg,
+  body[data-page="compare"] #xSeg,
   body[data-page="compare"] #rangeSeg, body[data-page="compare"] .dates { display: none; }
-  body[data-page="commits"] #viewSeg, body[data-page="commits"] #linkSeg { display: none; }
+  body[data-page="commits"] #viewSeg, body[data-page="commits"] #linkSeg,
+  body[data-page="commits"] #xSeg { display: none; }
 
   main { max-width: 1360px; margin: 0 auto; padding: 16px 20px 40px; }
   .card { background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; }
@@ -259,6 +261,10 @@
         <button id="vPct" aria-pressed="true">% change</button>
         <button id="vAbs" aria-pressed="false">Absolute</button>
       </div>
+      <div class="seg" id="xSeg" role="group" aria-label="X-axis spacing">
+        <button id="xDate" aria-pressed="true" title="Space commits by their commit date">Date</button>
+        <button id="xEven" aria-pressed="false" title="Space commits evenly — one step per commit, regardless of date">Even</button>
+      </div>
       <div class="seg" id="linkSeg" role="group" aria-label="Environment changes" hidden>
         <button id="vLink" aria-pressed="false"
           title="Draw lines through environment changes (dotted lines) instead of breaking, with percent changes relative to the range's first commit">Link env</button>
@@ -299,7 +305,7 @@ const SYNC_KEY = "tach";
 // unreadable at phone viewing distances.
 const COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
 
-const state = { page: "graphs", stat: null, view: "pct", range: "all", from: "", to: "",
+const state = { page: "graphs", stat: null, view: "pct", xmode: "date", range: "all", from: "", to: "",
                 q: "", before: "", after: "", fs: "", sort: "delta", hidecats: "", link: false, data: null,
                 releasesBySha: Object.create(null), cards: [], overview: null, modal: null };
 
@@ -541,6 +547,8 @@ function syncControls(){
   for(const b of $("rangeSeg").children) b.ariaPressed = b.dataset.range === state.range;
   $("vPct").ariaPressed = state.view === "pct";
   $("vAbs").ariaPressed = state.view === "abs";
+  $("xDate").ariaPressed = state.xmode === "date";
+  $("xEven").ariaPressed = state.xmode === "even";
   $("vLink").ariaPressed = state.link;
   if($("dFrom").value !== state.from) $("dFrom").value = state.from;
   if($("dTo").value !== state.to) $("dTo").value = state.to;
@@ -555,6 +563,7 @@ function readHash(){
   if(PAGES.some(pg => pg[0] === p.get("page"))) state.page = p.get("page");
   if(p.get("stat")) state.stat = p.get("stat");
   if(p.get("view") === "abs") state.view = "abs";
+  if(p.get("x") === "even") state.xmode = "even";
   if(RANGES.some(r => r.key === p.get("range")) || p.get("range") === "rel") state.range = p.get("range");
   if(DATE_RE.test(p.get("from") || "")) { state.from = p.get("from"); state.range = "custom"; }
   if(DATE_RE.test(p.get("to") || "")) { state.to = p.get("to"); state.range = "custom"; }
@@ -570,6 +579,7 @@ function writeHash(){
   const p = new URLSearchParams();
   p.set("page", state.page); p.set("stat", state.stat);
   p.set("view", state.view); p.set("range", state.range);
+  if(state.xmode === "even") p.set("x", "even");
   if(state.from) p.set("from", state.from);
   if(state.to) p.set("to", state.to);
   if(state.q) p.set("q", state.q);
@@ -584,6 +594,8 @@ function writeHash(){
 
 $("vPct").addEventListener("click", () => { state.view = "pct"; onControlChange(); });
 $("vAbs").addEventListener("click", () => { state.view = "abs"; onControlChange(); });
+$("xDate").addEventListener("click", () => { state.xmode = "date"; onControlChange(); });
+$("xEven").addEventListener("click", () => { state.xmode = "even"; onControlChange(); });
 $("vLink").addEventListener("click", () => { state.link = !state.link; onControlChange(); });
 let qTimer;
 $("search").addEventListener("input", e => {
@@ -735,7 +747,10 @@ function rebuild(){
 function renderGraphsPage(host){
   const recs = visibleRecords();
   if(recs.length === 0) return showEmpty("No records in this time range.");
-  const xs = recs.map(r => r.date_unix != null ? r.date_unix : Date.parse(r.date)/1000);
+  // Even mode plots one step per commit (x = record index); date mode plots by
+  // commit time. Either way the date filters above chose which records show.
+  const xs = state.xmode === "even" ? recs.map((_, i) => i)
+    : recs.map(r => r.date_unix != null ? r.date_unix : Date.parse(r.date)/1000);
   const markers = markerIndices(recs);
   const series = [];
   for(const k of filteredKeys()){
@@ -1250,6 +1265,30 @@ function xTickValues(u, splits, axisIdx, foundSpace, foundIncr){
   });
 }
 
+// Even-x mode: splits are record indices. Ticks are still labeled with the
+// commit's date — the axis just doesn't scale by it — and a label is drawn
+// only where the day changes, so a burst of same-day commits isn't a run of
+// identical labels. Year sublines follow the same rules as the time axis.
+function evenTickValues(recs){
+  return (u, splits) => {
+    const now = new Date();
+    let prev = null;
+    return splits.map(ix => {
+      const r = recs[ix];
+      if(!Number.isInteger(ix) || !r) return "";
+      const u0 = r.date_unix != null ? r.date_unix : Date.parse(r.date)/1000;
+      const d = new Date(u0 * 1000);
+      const sameDay = prev && d.getFullYear() === prev.getFullYear() &&
+                      d.getMonth() === prev.getMonth() && d.getDate() === prev.getDate();
+      const yearNews = prev ? d.getFullYear() !== prev.getFullYear()
+                            : d.getFullYear() !== now.getFullYear();
+      const label = sameDay ? "" : X_FMT.d(d) + (yearNews ? "\n" + d.getFullYear() : "");
+      prev = d;
+      return label;
+    });
+  };
+}
+
 function initChart(c){
   if(c.chart) return;
   const isOverview = c.kind === "overview";
@@ -1285,16 +1324,21 @@ function initChart(c){
     },
     fill: pctMode ? undefined : getVar("--series-soft"),
   });
+  const even = state.xmode === "even";
+  const xAxis = { stroke: getVar("--faint"), font: axisFont, size: COARSE ? 58 : 42,
+    space: COARSE ? 100 : 80,
+    grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 },
+    values: even ? evenTickValues(c.recs) : xTickValues };
+  // Integer increments only, so every tick lands on an actual commit.
+  if(even) xAxis.incrs = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
   const opts = {
     width: w, height: h, legend: { show: false }, pxAlign: 1,
     cursor: { sync: { key: SYNC_KEY, setSeries: false }, points: { size: 6 },
               drag: { x: false, y: false } },
-    scales: { x: { time: true } },
+    scales: { x: { time: !even } },
     series: [ {}, ...ysSplit.map(mkSeries) ],
     axes: [
-      { stroke: getVar("--faint"), font: axisFont, size: COARSE ? 58 : 42, space: COARSE ? 100 : 80,
-        grid: { show: false }, ticks: { stroke: getVar("--hairline"), size: 4 },
-        values: xTickValues },
+      xAxis,
       { stroke: getVar("--faint"), font: axisFont, size: autoAxisSize,
         space: labeled ? (COARSE ? 42 : 34) : (COARSE ? 38 : 30), gap: 4,
         grid: { stroke: getVar("--grid"), width: 1 }, ticks: { show: false },
