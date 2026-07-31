@@ -54,12 +54,12 @@ body="$(printf '%s' "$comments" | jq -rs --argjson id "$existing" '
 short="${sha:0:7}"
 if [ -n "$run_url" ]; then link="[the run in progress](${run_url})"; else link="the run in progress"; fi
 banner="${banner_id}
-> [!NOTE]
+> [!WARNING]
 > ⏳ **Benchmarks are re-running for \`${short}\`.** The results below are from an
 > earlier commit — check ${link} before reading them as current."
 
 # Any banner already there is REPLACED, not skipped: a second push before the
-# first run finishes must not leave the note naming the earlier commit and
+# first run finishes must not leave the banner naming the earlier commit and
 # linking its superseded run. Removing it means dropping the id line, the
 # quote lines that follow it, and the one blank line after them — then the new
 # banner goes back in after the hidden marker on line 1.
