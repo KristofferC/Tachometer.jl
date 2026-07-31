@@ -338,6 +338,27 @@ compare("path/to/MyPackage";
 Action inputs that also exist as `compare` keywords use underscores instead of
 dashes.
 
+### Install as a shell command
+
+On Julia 1.12+ the CLI can be installed as a
+[Pkg app](https://pkgdocs.julialang.org/v1.12/apps/), which puts a
+`tachometer` executable in `~/.julia/bin`:
+
+```
+pkg> app add https://github.com/KristofferC/Tachometer.jl
+```
+
+```sh
+tachometer                        # compare HEAD vs the working tree
+tachometer --baseline=v1.2.0 --nruns=3
+tachometer record --record-out=record.json
+```
+
+The first argument selects the mode (`compare`, `record`, `publish`, `render`);
+every `--option=value` sets the corresponding `TACHOMETER_<OPTION>` environment
+variable, so the same knobs as the action's [inputs](#inputs) apply. `compare`
+uses the local defaults above and exits non-zero on a regression.
+
 ## What makes a good benchmark suite
 
 A suite is only useful if it is cheap enough to run often. Aim for one that

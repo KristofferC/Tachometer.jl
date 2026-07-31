@@ -116,6 +116,52 @@ function _main_publish(io)
     return data_dir
 end
 
+# Pkg app entrypoint (`pkg> app add ...` gives a `tachometer` executable):
+# `tachometer [mode] [--option=value ...]` where every --option=value sets the
+# corresponding TACHOMETER_<OPTION> env var, so the app is the same CLI as the
+# action. Unlike the action, compare defaults to the documented local behavior:
+# baseline HEAD (vs the working tree) and no release-baseline swap.
+@static if isdefined(Base, Symbol("@main"))
+    const _APP_HELP = """
+        Tachometer — benchmark a package at two git revisions and report the difference.
+
+        Usage: tachometer [mode] [--option=value ...]
+
+        Modes (default: compare):
+          compare   benchmark baseline vs target and report
+          record    benchmark the current commit into a time-series record
+          publish   merge a record into the history and write the dashboard
+          render    re-render a report.json into Markdown
+
+        Options map to the TACHOMETER_* environment variables read by
+        `Tachometer.main` (the action's inputs): --baseline=v1.2.0 sets
+        TACHOMETER_BASELINE, --output-dir=out sets TACHOMETER_OUTPUT_DIR, etc.
+        Run from a git working copy of the package. Exits 1 when compare finds
+        a regression."""
+
+    function (@main)(args)
+        for arg in args
+            if arg in ("-h", "--help")
+                println(_APP_HELP)
+                return 0
+            elseif (m = match(r"^--([a-z][a-z0-9_-]*)=(.*)$", arg)) !== nothing
+                ENV["TACHOMETER_" * uppercase(replace(m[1], '-' => '_'))] = m[2]
+            elseif arg in ("compare", "record", "publish", "render")
+                ENV["TACHOMETER_MODE"] = arg
+            else
+                println(stderr, "tachometer: unexpected argument '", arg, "' (try --help)")
+                return 2
+            end
+        end
+        if _env("TACHOMETER_MODE", "compare") == "compare"
+            get!(ENV, "TACHOMETER_BASELINE", "HEAD")
+            get!(ENV, "TACHOMETER_RELEASE_BASELINE", "false")
+        end
+        report = main()
+        return report isa Report && report.status === :regressed ? 1 : 0
+    end
+end
+
 _env(name, default) = get(ENV, name, default)
 _env_nonempty(name, default) = let value = get(ENV, name, "")
     isempty(value) ? default : value

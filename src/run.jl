@@ -213,6 +213,11 @@ _short(sha) = sha[1:min(7, length(sha))]
 
 function _subprocess_env(env, threads)
     e = copy(ENV)
+    # The driver activates its own ephemeral project. A load path or project
+    # pinned by the parent must not leak into it — the Pkg app shim, for one,
+    # exports a JULIA_LOAD_PATH without @stdlib, which would break `using Pkg`.
+    delete!(e, "JULIA_LOAD_PATH")
+    delete!(e, "JULIA_PROJECT")
     # Pin threading for reproducibility. These are set *before* the caller's env
     # so an inherited JULIA_NUM_THREADS can't silently override the requested
     # value, while an explicit entry in `env` still wins.
