@@ -175,6 +175,15 @@
     .cmp-head .swap { justify-self: start; }
   }
   .cmp-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  /* Pinned so the sort and filter controls stay reachable while scrolled into a
+     long table. Not on phones, where the row wraps to three lines and would cost
+     a third of the screen on top of the already-sticky bar. */
+  @media (min-width: 641px){
+    .cmp-ctl { position: sticky; top: var(--barh, 44px); z-index: 4;
+               padding: 8px 0 10px; margin-bottom: 4px;
+               background: color-mix(in srgb, var(--bg) 82%, transparent);
+               backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  }
   .cmp-ctl .lbl { color: var(--muted); font-size: 12px; }
   .cmp-ctl .cat { border: 1px solid var(--hairline); background: none; color: var(--ink);
                   font-size: 12px; border-radius: 999px; padding: 3px 10px; cursor: pointer; }
