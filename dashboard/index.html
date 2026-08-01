@@ -1092,8 +1092,10 @@ function renderComparePage(host){
   }
   ctl.append(slbl, sortSeg);
   // Purely a display filter — the summary above still counts every benchmark.
-  const flat = rows.filter(r => r.pct != null && Math.abs(r.pct) < CHIP_EPS).length;
-  if(flat || state.hideflat){
+  // Rendered even at a count of zero: hiding every category would otherwise
+  // make the button vanish and shift the whole control row.
+  {
+    const flat = rows.filter(r => r.pct != null && Math.abs(r.pct) < CHIP_EPS).length;
     ctl.appendChild(el("span","div"));
     const b = el("button","cat"); b.textContent = "· invariant (" + flat + ")";
     b.ariaPressed = !state.hideflat;
