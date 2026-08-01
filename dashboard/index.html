@@ -194,6 +194,16 @@
   table.cmp tr:hover td { background: color-mix(in srgb, var(--series) 4%, transparent); }
   table.cmp td.key { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
   table.cmp td .chip { font-size: 11.5px; }
+  table.cmp th.num, table.cmp td.num { white-space: nowrap; }
+  /* Horizontal-only so the card still clips the table to its rounded corners. */
+  .cmp-wrap { overflow-x: auto; overflow-y: hidden; }
+  @media (max-width: 640px){
+    /* Narrow enough that Δ — the point of the page — would be pushed off the
+       edge, so drop the "before" values; the after column keeps the magnitude. */
+    table.cmp th:nth-child(2), table.cmp td:nth-child(2) { display: none; }
+    table.cmp th, table.cmp td { padding-left: 8px; padding-right: 8px; }
+    table.cmp td.key { font-size: 11.5px; overflow-wrap: anywhere; }
+  }
 
   /* Commits timeline */
   .timeline { padding: 4px 0; }
@@ -1152,7 +1162,7 @@ function renderComparePage(host){
     return host.appendChild(Object.assign(el("div","empty"), { textContent: msg }));
   }
 
-  const wrap = el("div","card"); wrap.style.overflow = "hidden";
+  const wrap = el("div","card cmp-wrap");
   const tbl = el("table","cmp");
   const thead = el("thead"); const trh = el("tr");
   const mkTh = (txt, cls) => { const th = el("th", cls); th.textContent = txt; return th; };
