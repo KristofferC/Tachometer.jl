@@ -180,6 +180,7 @@
                   font-size: 12px; border-radius: 999px; padding: 3px 10px; cursor: pointer; }
   .cmp-ctl .cat[aria-pressed=false] { color: var(--faint); opacity: .55; }
   .cmp-ctl .cat.all { font-weight: 600; margin-right: 2px; }
+  .cmp-ctl .div { width: 1px; align-self: stretch; min-height: 18px; background: var(--hairline); }
   .cmp-summary { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
                  padding: 12px 16px; margin-bottom: 14px; }
   .cmp-summary .big { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -306,7 +307,8 @@ const SYNC_KEY = "tach";
 const COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
 
 const state = { page: "graphs", stat: null, view: "pct", xmode: "date", range: "all", from: "", to: "",
-                q: "", before: "", after: "", fs: "", sort: "delta", hidecats: "", link: false, data: null,
+                q: "", before: "", after: "", fs: "", sort: "delta", sortdir: "desc", hideflat: false,
+                hidecats: "", link: false, data: null,
                 releasesBySha: Object.create(null), cards: [], overview: null, modal: null };
 
 const $ = id => document.getElementById(id);
@@ -558,6 +560,8 @@ function syncControls(){
 function onControlChange(){ syncControls(); writeHash(); rebuild(); }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, SHA_RE = /^[0-9a-f]{7,40}$/;
+// Direction each sort key starts in: biggest regression first, names A→Z.
+const SORT_DIR = { delta: "desc", name: "asc" };
 function readHash(){
   const p = new URLSearchParams(location.hash.slice(1));
   if(PAGES.some(pg => pg[0] === p.get("page"))) state.page = p.get("page");
@@ -572,6 +576,9 @@ function readHash(){
   if(SHA_RE.test(p.get("after") || "")) state.after = p.get("after");
   if(p.get("fs")) state.fs = p.get("fs");
   if(p.get("sort") === "name") state.sort = "name";
+  state.sortdir = SORT_DIR[state.sort];
+  if(p.get("dir") === "asc" || p.get("dir") === "desc") state.sortdir = p.get("dir");
+  if(p.get("hideflat") === "1") state.hideflat = true;
   if(p.get("hide")) state.hidecats = p.get("hide");
   if(p.get("link") === "1") state.link = true;
 }
@@ -587,6 +594,8 @@ function writeHash(){
   if(state.after) p.set("after", state.after);
   if(state.fs) p.set("fs", state.fs);
   if(state.sort !== "delta") p.set("sort", state.sort);
+  if(state.sortdir !== SORT_DIR[state.sort]) p.set("dir", state.sortdir);
+  if(state.hideflat) p.set("hideflat", "1");
   if(state.hidecats) p.set("hide", state.hidecats);
   if(state.link) p.set("link", "1");
   history.replaceState(null, "", "#" + p.toString());
@@ -1038,16 +1047,52 @@ function renderComparePage(host){
   const counts = new Map();
   for(const k of keys) counts.set(catOf(k), (counts.get(catOf(k)) || 0) + 1);
   const hidden = new Set(state.hidecats.split(",").filter(c => counts.has(c)));
+  keys = keys.filter(k => !hidden.has(catOf(k)));
+  const rows = [];
+  let logSum = 0, n = 0, worse = 0, better = 0;
+  for(const k of keys){
+    const va = statValue(ra, k), vb = statValue(rb, k);
+    const pct = (vb > 0 && va != null) ? (va/vb - 1) * 100 : null;
+    if(pct != null){ logSum += Math.log(va/vb); n++;
+      if(pct >= CHIP_EPS) worse++; else if(pct <= -CHIP_EPS) better++; }
+    rows.push({ key: k, vb, va, pct });
+  }
+  // Unmeasured rows have no delta to order by, so they stay grouped first either way.
+  const asc = state.sortdir === "asc";
+  if(state.sort === "name")
+    rows.sort((a,b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) * (asc ? 1 : -1));
+  else
+    rows.sort((a,b) => (b.pct == null) - (a.pct == null) || ((b.pct||0) - (a.pct||0)) * (asc ? -1 : 1));
+
   const ctl = el("div","cmp-ctl");
   const slbl = el("span","lbl"); slbl.textContent = "sort";
   const sortSeg = el("div","seg");
   for(const [key, label] of [["delta", "Δ"], ["name", "name"]]){
-    const b = el("button"); b.textContent = label; b.ariaPressed = state.sort === key;
-    b.addEventListener("click", () => { state.sort = key; onControlChange(); });
+    const on = state.sort === key;
+    const b = el("button");
+    b.textContent = on ? label + " " + (state.sortdir === "asc" ? "↑" : "↓") : label;
+    b.ariaPressed = on;
+    b.title = on ? "Reverse sort direction" : "Sort by " + (key === "delta" ? "Δ" : "name");
+    b.addEventListener("click", () => {
+      if(state.sort === key) state.sortdir = state.sortdir === "asc" ? "desc" : "asc";
+      else { state.sort = key; state.sortdir = SORT_DIR[key]; }
+      onControlChange();
+    });
     sortSeg.appendChild(b);
   }
   ctl.append(slbl, sortSeg);
+  // Purely a display filter — the summary above still counts every benchmark.
+  const flat = rows.filter(r => r.pct != null && Math.abs(r.pct) < CHIP_EPS).length;
+  if(flat || state.hideflat){
+    ctl.appendChild(el("span","div"));
+    const b = el("button","cat"); b.textContent = "· invariant (" + flat + ")";
+    b.ariaPressed = !state.hideflat;
+    b.title = (state.hideflat ? "Show" : "Hide") + " benchmarks within ±" + CHIP_EPS + "%";
+    b.addEventListener("click", () => { state.hideflat = !state.hideflat; onControlChange(); });
+    ctl.appendChild(b);
+  }
   if(counts.size > 1){
+    ctl.appendChild(el("span","div"));
     // Master toggle: behaves like a "select all" checkbox for the categories.
     const allOn = hidden.size === 0;
     const all = el("button","cat all"); all.textContent = "all";
@@ -1069,18 +1114,9 @@ function renderComparePage(host){
       ctl.appendChild(b);
     }
   }
-  keys = keys.filter(k => !hidden.has(catOf(k)));
-  const rows = [];
-  let logSum = 0, n = 0, worse = 0, better = 0;
-  for(const k of keys){
-    const va = statValue(ra, k), vb = statValue(rb, k);
-    const pct = (vb > 0 && va != null) ? (va/vb - 1) * 100 : null;
-    if(pct != null){ logSum += Math.log(va/vb); n++;
-      if(pct >= CHIP_EPS) worse++; else if(pct <= -CHIP_EPS) better++; }
-    rows.push({ key: k, vb, va, pct });
-  }
-  if(state.sort === "name") rows.sort((a,b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
-  else rows.sort((a,b) => (b.pct == null) - (a.pct == null) || (b.pct||0) - (a.pct||0));
+  const shown = state.hideflat
+    ? rows.filter(r => r.pct == null || Math.abs(r.pct) >= CHIP_EPS)
+    : rows;
 
   // Always rendered — even with every row filtered out — so toggling
   // categories doesn't make the summary pop in and out and reflow the page.
@@ -1107,10 +1143,12 @@ function renderComparePage(host){
     host.appendChild(sum);
   }
   host.appendChild(ctl);
-  if(rows.length === 0){
-    const msg = recordCoverage(ra) === "partial" && Object.keys(ra.benchmarks).length === 0
-      ? "This partial upload contains only explicit benchmark removals."
-      : "No benchmarks match.";
+  if(shown.length === 0){
+    const msg = rows.length
+      ? "No benchmark moved by more than ±" + CHIP_EPS + "%."
+      : recordCoverage(ra) === "partial" && Object.keys(ra.benchmarks).length === 0
+        ? "This partial upload contains only explicit benchmark removals."
+        : "No benchmarks match.";
     return host.appendChild(Object.assign(el("div","empty"), { textContent: msg }));
   }
 
@@ -1132,7 +1170,7 @@ function renderComparePage(host){
   trh.append(mkTh("Benchmark"), mkShaTh(state.before, rb), mkShaTh(state.after, ra), mkTh("Δ", "num"));
   thead.appendChild(trh); tbl.appendChild(thead);
   const tbody = el("tbody");
-  for(const r of rows){
+  for(const r of shown){
     const tr = el("tr");
     const tdk = el("td","key"); tdk.textContent = r.key;
     const tdb = el("td","num mono"); tdb.textContent = fmtAbs(r.vb);
