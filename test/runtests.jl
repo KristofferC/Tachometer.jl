@@ -167,6 +167,7 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         write(drv, """
         println("first")
         println(stderr, "on stderr")
+        println("\\e[91mred\\e[39m")
         println("last")
         exit(3)
         """)
@@ -177,9 +178,15 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
             streamed = String(take!(sink))
             @test occursin("[abc1234] first", streamed)
             @test occursin("[abc1234] last", streamed)
+            # ...colour and all, since a console renders it.
+            @test occursin("\e[91mred", streamed)
             # ...and still captured, stderr included, with the exit status intact.
             @test occursin("first", r.log) && occursin("on stderr", r.log)
             @test r.code.exitcode == 3
+            # The captured copy is what reaches a comment, so it is stripped whole:
+            # dropping the ESC alone would leave `[91m` behind as visible junk.
+            @test occursin("red", r.log)
+            @test !occursin('\e', r.log) && !occursin("[91m", r.log)
 
             # Off: nothing on `io`, but the log is unaffected.
             quiet = IOBuffer()
@@ -777,5 +784,13 @@ meta() = Meta(; package = "Demo", baseline_ref = "master",
         oer = render(Report(:errored, Measurement[], meta(), evil))
         @test occursin("```", oer)
         @test !occursin("<!-- tachometer:evil -->", oer)
+
+        # A log that reaches the re-render path with escapes still intact loses
+        # them entirely, sequence bodies included.
+        colored = render(Report(:errored, Measurement[], meta(),
+            "\e[91m\e[1mERROR: \e[22m\e[39mboom\n\e[90m   @ Pkg \e[4mfile.jl:1\e[24m\e[39m"))
+        @test occursin("ERROR: boom", colored)
+        @test !occursin('\e', colored)
+        @test !occursin("[91m", colored) && !occursin("[24m", colored)
     end
 end
