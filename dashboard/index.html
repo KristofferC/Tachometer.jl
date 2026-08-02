@@ -1505,15 +1505,13 @@ function hoverPlugin(c){
       if(tag){ const t = el("span","tag"); t.textContent = tag; head.appendChild(t); }
       tt.appendChild(head);
       if(r.message){ const m = el("div","msg"); m.textContent = r.message; tt.appendChild(m); }
-      // The cursor snaps to the nearest commit, but the dotted env line (and
-      // its "env" label, drawn just right of it) is what people aim for — so
-      // also match markers within a small pixel distance of the cursor.
-      const envIdx = c.markers.env.includes(idx) ? idx :
-        c.markers.env.find(i => Math.abs(u.valToPos(u.data[0][i], "x") - u.cursor.left) <= 15);
-      if(envIdx != null){
+      // Only for the commit that actually changed environment: matching nearby
+      // markers by pixel distance made the note follow the cursor across
+      // several commits, reading as if they had all changed environment.
+      if(c.markers.env.includes(idx)){
         const e = el("div","env");
-        const b = el("b"); b.textContent = "measurement environment changed";
-        e.append(b, envChangeDesc(c.recs[envIdx-1], c.recs[envIdx]));
+        const b = el("b"); b.textContent = "measurement environment changed at this commit";
+        e.append(b, envChangeDesc(c.recs[idx-1], c.recs[idx]));
         tt.appendChild(e);
       }
       const row = el("div","num");
