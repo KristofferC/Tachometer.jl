@@ -381,7 +381,7 @@ end
 # @mentions, and markdown link/image syntax so nothing renders as a link, image,
 # heading, or mention.
 function _safetext(s)
-    t = replace(String(s), r"[\x00-\x1f\x7f]" => " ")
+    t = replace(_strip_ansi(s), r"[\x00-\x1f\x7f]" => " ")
     # Escape raw HTML/autolinks first — GitHub renders a whitelist of inline HTML
     # (<a>, <img>, <https://…>), so entity-escaping neutralises those too.
     t = replace(t, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;")
@@ -400,7 +400,7 @@ _safeurl(u) = occursin(r"^https://[^\s\"'<>)]+$", String(u)) ? String(u) : ""
 
 # Show an untrusted message as a fenced code block that it cannot break out of.
 function _safemsg(s)
-    t = replace(String(s), r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" => " ")
+    t = replace(_strip_ansi(s), r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" => " ")
     # Defang code-fence breakout, mentions, and any embedded sticky marker (the
     # comment search matches marker text anywhere in the body).
     t = replace(t, "```" => "'''", "@" => "@​", "<!--" => "<!‑‑", "-->" => "‑‑>")

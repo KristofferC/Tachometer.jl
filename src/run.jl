@@ -298,7 +298,11 @@ function _run_julia(driver, env; stream::Bool = false, io::IO = stdout, prefix::
     close(out.in)   # the parent holds no write end, so the reader sees EOF at exit
     reader = @async try
         for line in eachline(out)
-            println(buf, line)
+            # `julia_cmd()` carries the parent's `--color=yes` into the subprocess, so
+            # its output is full of escape sequences. Keep them on the streamed copy
+            # (a console renders them) but not in the captured log, which ends up in a
+            # pull request comment and in the truncation budget of `_tail`.
+            println(buf, _strip_ansi(line))
             if stream
                 println(io, prefix, line)
                 flush(io)
@@ -333,6 +337,13 @@ end
 # BenchmarkGroup keys are often tuples like `("spatial-dim", 2)`; render those as
 # `spatial-dim=2` instead of the raw tuple `repr` so the report reads cleanly.
 _keypart(x) = x isa Tuple ? join(string.(x), "=") : string(x)
+
+# CSI (colour, cursor moves), OSC (window title, hyperlinks) and the two-character
+# escapes. Dropping whole sequences matters: scrubbing the ESC byte alone would
+# leave the `[91m` bodies behind as visible junk.
+const _ANSI = r"\e\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\e\][^\a\e]*(?:\a|\e\\)|\e[@-Z\\-_]"
+
+_strip_ansi(s::AbstractString) = replace(String(s), _ANSI => "")
 
 function _tail(s::AbstractString; n = 40, chars = 4000)
     lines = split(s, '\n')
