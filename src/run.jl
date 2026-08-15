@@ -270,9 +270,14 @@ function _write_driver(srcdir, script, outfile, retune, verbose)
     suite = Main.SUITE::BenchmarkGroup
 
     paramsfile = joinpath(_BENCHDIR, "tune.json")
-    if !_RETUNE && isfile(paramsfile)
+    if _RETUNE
+        tune!(suite)
+    elseif isfile(paramsfile)
         loadparams!(suite, BenchmarkTools.load(paramsfile)[1], :evals, :samples)
-    else
+    elseif !all(b.params.evals_set for (_, b) in BenchmarkTools.leaves(suite))
+        # Skipped when every benchmark declares `evals` explicitly: `tune!` would not
+        # change anything, but it still runs several full GC sweeps per group node,
+        # which costs ~10 s on a large suite.
         tune!(suite)
     end
 
